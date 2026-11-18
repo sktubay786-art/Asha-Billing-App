@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "BusinessSettings": {
+      "title": "BusinessSettings",
+      "description": "Business profile and payment details for the authenticated owner.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "company": { "type": "string" },
+        "owner": { "type": "string" },
+        "contact": { "type": "string" },
+        "address": { "type": "string" },
+        "upi": { "type": "string" },
+        "payee": { "type": "string" },
+        "country": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "company", "owner", "contact", "address", "upi", "payee", "country", "createdAt", "updatedAt"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Registered irrigation billing customer and opening due balance.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "village": { "type": "string" },
+        "address": { "type": "string" },
+        "openingDue": { "type": "number" },
+        "landArea": { "type": "string" },
+        "landOwnerType": { "type": "string", "enum": ["Own", "Other"] },
+        "landOwnerName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "name", "phone", "village", "address", "openingDue", "createdAt", "updatedAt"]
+    },
+    "Bill": {
+      "title": "Bill",
+      "description": "Irrigation land-measurement invoice linked to a customer.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "billNo": { "type": "string" },
+        "date": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "village": { "type": "string" },
+        "season": { "type": "string" },
+        "landAmount": { "type": "number" },
+        "unit": { "type": "string", "enum": ["decimal", "katha", "bigha"] },
+        "bigha": { "type": "number" },
+        "rate": { "type": "number" },
+        "current": { "type": "number" },
+        "previousDue": { "type": "number" },
+        "allTotal": { "type": "number" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "billNo", "date", "customerId", "customerName", "phone", "address", "village", "season", "landAmount", "unit", "bigha", "rate", "current", "previousDue", "allTotal", "note", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment or settlement adjustment recorded against an invoice.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "billId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "date": { "type": "string" },
+        "amount": { "type": "number" },
+        "mode": { "type": "string", "enum": ["Cash", "UPI", "Bank transfer", "Other", "Settlement"] },
+        "receivedIn": { "type": "string" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "billId", "customerId", "date", "amount", "mode", "receivedIn", "note", "createdAt", "updatedAt"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Operational cost entry logged for profit and loss tracking.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string", "enum": ["Fuel", "Maintenance", "Electricity", "Salary", "Parts", "Other"] },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "paidMode": { "type": "string", "enum": ["Cash", "UPI", "Bank transfer", "Other"] },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "title", "category", "amount", "date", "paidMode", "note", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/BusinessSettings" },
+      "description": "Owner business profile and UPI payment details."
+    },
+    "/users/{userId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customer directory and opening dues owned by the user."
+    },
+    "/users/{userId}/bills/{billId}": {
+      "schema": { "$ref": "#/entities/Bill" },
+      "description": "Invoices generated for customers owned by the user."
+    },
+    "/users/{userId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payments and settlement adjustments linked to bills and customers."
+    },
+    "/users/{userId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Operational business expenses for dashboard profit and loss overview."
+    }
+  }
+}

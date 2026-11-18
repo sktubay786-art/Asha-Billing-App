@@ -1,0 +1,216 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSharedAshaOwner() {
+      return isSignedIn() && (
+        (
+          'email_verified' in request.auth.token &&
+          request.auth.token.email_verified == true &&
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          request.auth.token.email.lower() in ['sktubay786@gmail.com', 'gamingtubay@gmail.com']
+        ) ||
+        (
+          'phone_number' in request.auth.token &&
+          request.auth.token.phone_number in ['+918710065540', '+919564061920']
+        )
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && (
+        request.auth.uid == userId ||
+        (userId == 'asha_owner_shared' && isSharedAshaOwner())
+      );
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidBusinessSettings(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.company is string && data.company.size() <= 160 &&
+             data.owner is string && data.owner.size() <= 120 &&
+             data.contact is string && data.contact.size() <= 40 &&
+             data.address is string && data.address.size() <= 300 &&
+             data.upi is string && data.upi.size() <= 120 &&
+             data.payee is string && data.payee.size() <= 120 &&
+             data.country is string && data.country.size() <= 12;
+    }
+
+    function isValidCustomer(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.phone is string && data.phone.size() <= 40 &&
+             data.village is string && data.village.size() <= 120 &&
+             data.address is string && data.address.size() <= 250 &&
+             data.openingDue is number && data.openingDue >= 0 && data.openingDue <= 100000000 &&
+             (!('landArea' in data) || (data.landArea is string && data.landArea.size() <= 120)) &&
+             (!('landOwnerType' in data) || (data.landOwnerType is string && data.landOwnerType in ['Own', 'Other'])) &&
+             (!('landOwnerName' in data) || (data.landOwnerName is string && data.landOwnerName.size() <= 120));
+    }
+
+    function isValidBill(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.billNo is string && data.billNo.size() >= 1 && data.billNo.size() <= 60 &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 24 &&
+             data.customerId is string && isValidId(data.customerId) &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120 &&
+             data.phone is string && data.phone.size() <= 40 &&
+             data.address is string && data.address.size() <= 250 &&
+             data.village is string && data.village.size() <= 120 &&
+             data.season is string && data.season.size() <= 120 &&
+             data.landAmount is number && data.landAmount >= 0 && data.landAmount <= 1000000 &&
+             data.unit is string && data.unit in ['decimal', 'katha', 'bigha'] &&
+             data.bigha is number && data.bigha >= 0 && data.bigha <= 1000000 &&
+             data.rate is number && data.rate >= 0 && data.rate <= 10000000 &&
+             data.current is number && data.current >= 0 && data.current <= 100000000 &&
+             data.previousDue is number && data.previousDue >= 0 && data.previousDue <= 100000000 &&
+             data.allTotal is number && data.allTotal > 0 && data.allTotal <= 200000000 &&
+             data.note is string && data.note.size() <= 500;
+    }
+
+    function isValidPayment(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.billId is string && isValidId(data.billId) &&
+             data.customerId is string && isValidId(data.customerId) &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 24 &&
+             data.amount is number && data.amount > 0 && data.amount <= 200000000 &&
+             data.mode is string && data.mode in ['Cash', 'UPI', 'Bank transfer', 'Other', 'Settlement'] &&
+             data.receivedIn is string && data.receivedIn.size() <= 80 &&
+             data.note is string && data.note.size() <= 500;
+    }
+
+    function isValidExpense(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+             data.category is string && data.category in ['Fuel', 'Maintenance', 'Electricity', 'Salary', 'Parts', 'Other'] &&
+             data.amount is number && data.amount > 0 && data.amount <= 200000000 &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 24 &&
+             data.paidMode is string && data.paidMode in ['Cash', 'UPI', 'Bank transfer', 'Other'] &&
+             data.note is string && data.note.size() <= 500;
+    }
+
+    match /users/{userId}/settings/{settingId} {
+      allow get: if isOwner(userId) && isValidId(settingId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(settingId) &&
+                       incoming().keys().hasAll(['userId', 'company', 'owner', 'contact', 'address', 'upi', 'payee', 'country', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'company', 'owner', 'contact', 'address', 'upi', 'payee', 'country', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidBusinessSettings(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(settingId) &&
+                       isValidBusinessSettings(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['company', 'owner', 'contact', 'address', 'upi', 'payee', 'country', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(settingId);
+    }
+
+    match /users/{userId}/customers/{customerId} {
+      allow get: if isOwner(userId) && isValidId(customerId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(customerId) &&
+                       incoming().keys().hasAll(['userId', 'name', 'phone', 'village', 'address', 'openingDue', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landOwnerType', 'landOwnerName', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidCustomer(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(customerId) &&
+                       isValidCustomer(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       (
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landOwnerType', 'landOwnerName', 'updatedAt']) ||
+                         incoming().diff(existing()).affectedKeys().hasOnly(['openingDue', 'updatedAt'])
+                       );
+      allow delete: if isOwner(userId) && isValidId(customerId);
+    }
+
+    match /users/{userId}/bills/{billId} {
+      allow get: if isOwner(userId) && isValidId(billId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(billId) &&
+                       incoming().keys().hasAll(['userId', 'billNo', 'date', 'customerId', 'customerName', 'phone', 'address', 'village', 'season', 'landAmount', 'unit', 'bigha', 'rate', 'current', 'previousDue', 'allTotal', 'note', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'billNo', 'date', 'customerId', 'customerName', 'phone', 'address', 'village', 'season', 'landAmount', 'unit', 'bigha', 'rate', 'current', 'previousDue', 'allTotal', 'note', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidBill(incoming(), userId) &&
+                       exists(/databases/$(database)/documents/users/$(userId)/customers/$(incoming().customerId));
+      allow update: if isOwner(userId) &&
+                       isValidId(billId) &&
+                       isValidBill(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['note', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(billId);
+    }
+
+    match /users/{userId}/payments/{paymentId} {
+      allow get: if isOwner(userId) && isValidId(paymentId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(paymentId) &&
+                       incoming().keys().hasAll(['userId', 'billId', 'customerId', 'date', 'amount', 'mode', 'receivedIn', 'note', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'billId', 'customerId', 'date', 'amount', 'mode', 'receivedIn', 'note', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidPayment(incoming(), userId) &&
+                       existsAfter(/databases/$(database)/documents/users/$(userId)/bills/$(incoming().billId)) &&
+                       exists(/databases/$(database)/documents/users/$(userId)/customers/$(incoming().customerId));
+      allow update: if false;
+      allow delete: if isOwner(userId) && isValidId(paymentId);
+    }
+
+    match /users/{userId}/expenses/{expenseId} {
+      allow get: if isOwner(userId) && isValidId(expenseId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(expenseId) &&
+                       incoming().keys().hasAll(['userId', 'title', 'category', 'amount', 'date', 'paidMode', 'note', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'title', 'category', 'amount', 'date', 'paidMode', 'note', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidExpense(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(expenseId) &&
+                       isValidExpense(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'amount', 'date', 'paidMode', 'note', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(expenseId);
+    }
+  }
+}

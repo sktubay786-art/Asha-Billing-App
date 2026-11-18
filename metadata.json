@@ -1,0 +1,8 @@
+{
+  "name": "ASHA Billing",
+  "description": "Billing, customer ledger, payment tracking, and land measurement calculator for ASHA Mini Shallow.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
