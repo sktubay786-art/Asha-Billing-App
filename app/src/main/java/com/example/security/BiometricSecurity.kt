@@ -10,6 +10,14 @@ import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -56,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.example.R
+import com.example.ui.components.BmwPrecisionStripe
+import com.example.ui.theme.BmwTelemetryStyle
 import com.example.ui.theme.EmeraldMint
 import com.example.ui.theme.EmeraldPrimary
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -103,7 +115,8 @@ data class AppLocalPreferences(
     val qrMode: String = "Dynamic amount QR",
     val qrImagePath: String = "",
     val defaultPrintSize: String = "Thermal · 80 mm",
-    val defaultBillTemplate: String = "Premium Green Bill"
+    val defaultBillTemplate: String = "Premium Green Bill",
+    val bengaliBillMode: Boolean = false
 )
 
 class AppPreferencesStore(context: Context) {
@@ -126,7 +139,8 @@ class AppPreferencesStore(context: Context) {
         qrImagePath = prefs.getString(KEY_QR_IMAGE_PATH, "") ?: "",
         defaultPrintSize = prefs.getString(KEY_PRINT_SIZE, "Thermal · 80 mm") ?: "Thermal · 80 mm",
         defaultBillTemplate = prefs.getString(KEY_BILL_TEMPLATE, "Premium Green Bill")
-            ?: "Premium Green Bill"
+            ?: "Premium Green Bill",
+        bengaliBillMode = prefs.getBoolean(KEY_BENGALI_BILL_MODE, false)
     )
 
     fun update(transform: (AppLocalPreferences) -> AppLocalPreferences) {
@@ -144,6 +158,7 @@ class AppPreferencesStore(context: Context) {
             .putString(KEY_QR_IMAGE_PATH, next.qrImagePath)
             .putString(KEY_PRINT_SIZE, next.defaultPrintSize)
             .putString(KEY_BILL_TEMPLATE, next.defaultBillTemplate)
+            .putBoolean(KEY_BENGALI_BILL_MODE, next.bengaliBillMode)
             .apply()
     }
 
@@ -183,6 +198,7 @@ class AppPreferencesStore(context: Context) {
         private const val KEY_QR_IMAGE_PATH = "qr_image_path"
         private const val KEY_PRINT_SIZE = "default_print_size"
         private const val KEY_BILL_TEMPLATE = "default_bill_template"
+        private const val KEY_BENGALI_BILL_MODE = "bengali_bill_mode"
     }
 }
 
@@ -297,6 +313,26 @@ fun BiometricGateScreen(
     val context = LocalContext.current
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var triggeredAutoPrompt by remember(moduleTitle) { mutableStateOf(false) }
+    var appeared by remember { mutableStateOf(false) }
+
+    val cardScale by animateFloatAsState(
+        targetValue = if (appeared) 1f else 0.92f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "biometric_card_scale"
+    )
+    val pulseTransition = rememberInfiniteTransition(label = "bio_pulse")
+    val pulseScale by pulseTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bio_pulse_scale"
+    )
 
     fun triggerPrompt() {
         errorMessage = null
@@ -311,6 +347,7 @@ fun BiometricGateScreen(
     }
 
     LaunchedEffect(moduleTitle) {
+        appeared = true
         if (!triggeredAutoPrompt) {
             triggeredAutoPrompt = true
             triggerPrompt()
@@ -320,36 +357,68 @@ fun BiometricGateScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.background,
+                        primaryColor.copy(alpha = 0.08f)
+                    )
+                )
+            )
             .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 440.dp),
-            shape = RoundedCornerShape(24.dp),
+                .widthIn(max = 420.dp)
+                .scale(cardScale),
+            shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 4.dp
+            border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.25f)),
+            shadowElevation = 8.dp
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                BmwPrecisionStripe(
+                    height = 3.dp,
+                    modifier = Modifier.width(80.dp)
+                )
+
+                Text(
+                    text = "BIOMETRIC SHIELD",
+                    style = BmwTelemetryStyle,
+                    color = primaryColor
+                )
+
                 Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(CircleShape)
-                        .background(EmeraldMint),
+                    modifier = Modifier.size(92.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Fingerprint,
-                        contentDescription = null,
-                        tint = primaryColor,
-                        modifier = Modifier.size(38.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(86.dp)
+                            .scale(pulseScale)
+                            .clip(CircleShape)
+                            .background(primaryColor.copy(alpha = 0.12f))
                     )
+                    Box(
+                        modifier = Modifier
+                            .size(68.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldMint),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Fingerprint,
+                            contentDescription = "Biometric fingerprint sensor",
+                            tint = primaryColor,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    }
                 }
 
                 Text(
@@ -386,7 +455,7 @@ fun BiometricGateScreen(
 
                 Button(
                     onClick = { triggerPrompt() },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = primaryColor,
                         contentColor = Color.White
@@ -411,7 +480,7 @@ fun BiometricGateScreen(
                 if (secondaryActionLabel != null && onSecondaryAction != null) {
                     OutlinedButton(
                         onClick = onSecondaryAction,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)

@@ -25,10 +25,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Landscape
 import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -69,9 +72,11 @@ import androidx.compose.ui.window.Dialog
 import com.example.R
 import com.example.data.model.BillingDashboardData
 import com.example.data.model.Customer
+import com.example.data.model.LandUnit
 import com.example.data.model.customerInitials
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.BarcodeScannerDialog
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldDeep
@@ -108,15 +113,45 @@ fun CustomersScreen(
     ) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(UserFilter.ALL) }
     var editingCustomer by remember { mutableStateOf<Customer?>(null) }
     var showFormDialog by remember { mutableStateOf(false) }
+    var showBarcodeScanner by remember { mutableStateOf(false) }
 
     if (openAddDialogImmediately) {
         onConsumeAddDialogFlag()
         editingCustomer = null
         showFormDialog = true
+    }
+
+    fun handleScannedCustomerCode(rawCode: String) {
+        val raw = rawCode.trim()
+        if (raw.isEmpty()) return
+        val strippedId = if (raw.startsWith("ASHA_CUST:", ignoreCase = true)) {
+            raw.substringAfter(":").trim()
+        } else {
+            raw
+        }
+        val digits10 = raw.filter { it.isDigit() }.let { if (it.length >= 10) it.takeLast(10) else "" }
+        val matched = data.customers.firstOrNull { it.id == strippedId }
+            ?: data.customers.firstOrNull { it.id.equals(raw, ignoreCase = true) }
+            ?: (if (digits10.isNotBlank()) {
+                data.customers.firstOrNull {
+                    val p = it.phone.filter { ch -> ch.isDigit() }
+                    p.length >= 10 && p.takeLast(10) == digits10
+                }
+            } else null)
+            ?: data.bills.firstOrNull { it.billNo.equals(raw, ignoreCase = true) }?.let { bill ->
+                data.customers.firstOrNull { it.id == bill.customerId }
+            }
+        if (matched != null) {
+            onOpenCustomerChat(matched)
+        } else {
+            searchQuery = raw
+            Toast.makeText(context, "No exact customer ID match for $raw", Toast.LENGTH_SHORT).show()
+        }
     }
 
     val filteredCustomers = remember(data.customers, data.bills, data.payments, searchQuery, activeFilter) {
@@ -149,34 +184,59 @@ fun CustomersScreen(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text(stringResource(R.string.search_customers_hint)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Search,
-                                contentDescription = null,
-                                tint = EmeraldPrimary
-                            )
-                        },
-                        trailingIcon = {
-                            AnimatedVisibility(visible = searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "Clear search")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text(stringResource(R.string.search_customers_hint)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    tint = EmeraldPrimary
+                                )
+                            },
+                            trailingIcon = {
+                                AnimatedVisibility(visible = searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "Clear search")
+                                    }
                                 }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(28.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("customer_search_input")
+                        )
+
+                        Surface(
+                            onClick = { showBarcodeScanner = true },
+                            shape = RoundedCornerShape(20.dp),
+                            color = EmeraldPrimary.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, EmeraldPrimary.copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .size(54.dp)
+                                .testTag("customers_scan_barcode_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.QrCodeScanner,
+                                    contentDescription = "Scan Customer Barcode or QR",
+                                    tint = EmeraldPrimary,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(28.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("customer_search_input")
-                    )
+                        }
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -298,6 +358,16 @@ fun CustomersScreen(
                     if (success) showFormDialog = false
                 }
             }
+        )
+    }
+
+    if (showBarcodeScanner) {
+        BarcodeScannerDialog(
+            onBarcodeScanned = { scanned ->
+                showBarcodeScanner = false
+                handleScannedCustomerCode(scanned)
+            },
+            onDismiss = { showBarcodeScanner = false }
         )
     }
 }

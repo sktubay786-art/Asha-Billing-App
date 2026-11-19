@@ -67,6 +67,7 @@ service cloud.firestore {
              data.address is string && data.address.size() <= 250 &&
              data.openingDue is number && data.openingDue >= 0 && data.openingDue <= 100000000 &&
              (!('landArea' in data) || (data.landArea is string && data.landArea.size() <= 120)) &&
+             (!('landUnit' in data) || (data.landUnit is string && data.landUnit in ['decimal', 'katha', 'bigha'])) &&
              (!('landOwnerType' in data) || (data.landOwnerType is string && data.landOwnerType in ['Own', 'Other'])) &&
              (!('landOwnerName' in data) || (data.landOwnerName is string && data.landOwnerName.size() <= 120));
     }
@@ -112,6 +113,31 @@ service cloud.firestore {
              data.note is string && data.note.size() <= 500;
     }
 
+    function isValidChatMessage(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.customerId is string && isValidId(data.customerId) &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
+             data.sender is string && data.sender in ['ME', 'CUSTOMER'] &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 24;
+    }
+
+    function isValidWbsedclConsumer(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.consumerNo is string && data.consumerNo.size() >= 3 && data.consumerNo.size() <= 40 &&
+             data.label is string && data.label.size() >= 1 && data.label.size() <= 80 &&
+             data.installationNote is string && data.installationNote.size() <= 200;
+    }
+
+    function isValidWbsedclPayment(data, userId) {
+      return data.userId is string && data.userId == userId && data.userId.size() <= 128 &&
+             data.consumerNo is string && data.consumerNo.size() >= 3 && data.consumerNo.size() <= 40 &&
+             data.consumerLabel is string && data.consumerLabel.size() <= 80 &&
+             data.billMonth is string && data.billMonth.size() >= 1 && data.billMonth.size() <= 40 &&
+             data.amount is number && data.amount > 0 && data.amount <= 200000000 &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 24 &&
+             data.note is string && data.note.size() <= 500;
+    }
+
     match /users/{userId}/settings/{settingId} {
       allow get: if isOwner(userId) && isValidId(settingId);
       allow list: if isOwner(userId);
@@ -138,7 +164,7 @@ service cloud.firestore {
       allow create: if isOwner(userId) &&
                        isValidId(customerId) &&
                        incoming().keys().hasAll(['userId', 'name', 'phone', 'village', 'address', 'openingDue', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landOwnerType', 'landOwnerName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landUnit', 'landOwnerType', 'landOwnerName', 'createdAt', 'updatedAt']) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt) &&
                        isValidCustomer(incoming(), userId);
@@ -149,7 +175,7 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
                        (
-                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landOwnerType', 'landOwnerName', 'updatedAt']) ||
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'village', 'address', 'openingDue', 'landArea', 'landUnit', 'landOwnerType', 'landOwnerName', 'updatedAt']) ||
                          incoming().diff(existing()).affectedKeys().hasOnly(['openingDue', 'updatedAt'])
                        );
       allow delete: if isOwner(userId) && isValidId(customerId);
@@ -170,10 +196,11 @@ service cloud.firestore {
                        isValidId(billId) &&
                        isValidBill(incoming(), userId) &&
                        incoming().userId == existing().userId &&
+                       incoming().billNo == existing().billNo &&
                        incoming().customerId == existing().customerId &&
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['note', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['date', 'season', 'landAmount', 'unit', 'bigha', 'rate', 'current', 'previousDue', 'allTotal', 'note', 'updatedAt']);
       allow delete: if isOwner(userId) && isValidId(billId);
     }
 
@@ -189,7 +216,15 @@ service cloud.firestore {
                        isValidPayment(incoming(), userId) &&
                        existsAfter(/databases/$(database)/documents/users/$(userId)/bills/$(incoming().billId)) &&
                        exists(/databases/$(database)/documents/users/$(userId)/customers/$(incoming().customerId));
-      allow update: if false;
+      allow update: if isOwner(userId) &&
+                       isValidId(paymentId) &&
+                       isValidPayment(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().billId == existing().billId &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['date', 'amount', 'mode', 'receivedIn', 'note', 'updatedAt']);
       allow delete: if isOwner(userId) && isValidId(paymentId);
     }
 
@@ -211,6 +246,69 @@ service cloud.firestore {
                        isValidTimestamp(incoming().updatedAt) &&
                        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'amount', 'date', 'paidMode', 'note', 'updatedAt']);
       allow delete: if isOwner(userId) && isValidId(expenseId);
+    }
+
+    match /users/{userId}/chatMessages/{messageId} {
+      allow get: if isOwner(userId) && isValidId(messageId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(messageId) &&
+                       incoming().keys().hasAll(['userId', 'customerId', 'text', 'sender', 'date', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'customerId', 'text', 'sender', 'date', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidChatMessage(incoming(), userId) &&
+                       exists(/databases/$(database)/documents/users/$(userId)/customers/$(incoming().customerId));
+      allow update: if isOwner(userId) &&
+                       isValidId(messageId) &&
+                       isValidChatMessage(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().sender == existing().sender &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['text', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(messageId);
+    }
+
+    match /users/{userId}/wbsedclConsumers/{consumerId} {
+      allow get: if isOwner(userId) && isValidId(consumerId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(consumerId) &&
+                       incoming().keys().hasAll(['userId', 'consumerNo', 'label', 'installationNote', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'consumerNo', 'label', 'installationNote', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidWbsedclConsumer(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(consumerId) &&
+                       isValidWbsedclConsumer(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['consumerNo', 'label', 'installationNote', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(consumerId);
+    }
+
+    match /users/{userId}/wbsedclPayments/{paymentId} {
+      allow get: if isOwner(userId) && isValidId(paymentId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidId(paymentId) &&
+                       incoming().keys().hasAll(['userId', 'consumerNo', 'consumerLabel', 'billMonth', 'amount', 'date', 'note', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'consumerNo', 'consumerLabel', 'billMonth', 'amount', 'date', 'note', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidWbsedclPayment(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(paymentId) &&
+                       isValidWbsedclPayment(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['consumerNo', 'consumerLabel', 'billMonth', 'amount', 'date', 'note', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(paymentId);
     }
   }
 }

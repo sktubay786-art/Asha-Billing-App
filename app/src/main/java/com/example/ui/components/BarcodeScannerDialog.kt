@@ -134,7 +134,15 @@ fun BarcodeScannerDialog(
 
                     val barcodeScanner = remember {
                         val options = BarcodeScannerOptions.Builder()
-                            .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
+                            .setBarcodeFormats(
+                                Barcode.FORMAT_CODE_128,
+                                Barcode.FORMAT_QR_CODE,
+                                Barcode.FORMAT_CODE_39,
+                                Barcode.FORMAT_EAN_13,
+                                Barcode.FORMAT_EAN_8,
+                                Barcode.FORMAT_UPC_A,
+                                Barcode.FORMAT_ALL_FORMATS
+                            )
                             .build()
                         BarcodeScanning.getClient(options)
                     }
@@ -250,7 +258,7 @@ fun BarcodeScannerDialog(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Scan Customer / Product",
+                                text = "Scan 1D Barcode / QR",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold
@@ -315,13 +323,13 @@ fun BarcodeScannerDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Point camera at QR or Barcode",
+                                    text = "Point camera at 1D Barcode or QR",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Supports ASHA Customer QR, UPI/Phone & Product Tags",
+                                    text = "Scans Customer ID Barcodes (Code 128), QR & Phone codes",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.White.copy(alpha = 0.72f)
                                 )
@@ -402,11 +410,12 @@ private fun ScannerReticleOverlay(modifier: Modifier = Modifier) {
     )
 
     Canvas(modifier = modifier) {
-        val frameSize = (size.minDimension * 0.68f).coerceAtMost(300.dp.toPx())
-        val left = (size.width - frameSize) / 2f
-        val top = (size.height - frameSize) / 2f - 28.dp.toPx()
-        val right = left + frameSize
-        val bottom = top + frameSize
+        val frameW = (size.width * 0.80f).coerceAtMost(330.dp.toPx())
+        val frameH = (size.height * 0.34f).coerceIn(190.dp.toPx(), 260.dp.toPx())
+        val left = (size.width - frameW) / 2f
+        val top = (size.height - frameH) / 2f - 28.dp.toPx()
+        val right = left + frameW
+        val bottom = top + frameH
 
         // Dim surrounding viewport softly
         drawRect(color = Color.Black.copy(alpha = 0.42f))
@@ -429,7 +438,7 @@ private fun ScannerReticleOverlay(modifier: Modifier = Modifier) {
         drawLine(bracketColor, Offset(right, bottom - cornerLen), Offset(right, bottom), strokeW, StrokeCap.Round)
 
         // Animated laser line inside reticle
-        val laserY = top + frameSize * lineProgress
+        val laserY = top + frameH * lineProgress
         drawLine(
             color = Color(0xFF22C55E),
             start = Offset(left + 12.dp.toPx(), laserY),
@@ -441,15 +450,18 @@ private fun ScannerReticleOverlay(modifier: Modifier = Modifier) {
 }
 
 /**
- * Generates and displays a scannable Customer QR Pass so any customer card can be scanned at billing time.
+ * Generates and displays a compact horizontal 1D Code 128 Barcode encoding ONLY the short Customer ID
+ * so any customer can be scanned instantly for chat or billing.
  */
 @Composable
 fun CustomerQrPassDialog(
     customer: Customer,
     onDismiss: () -> Unit
 ) {
-    val qrContent = remember(customer.id) { "ASHA_CUST:${customer.id}" }
-    val qrBitmap = remember(qrContent) { BillDocumentEngine.generateQrBitmap(qrContent, 360) }
+    val barcodeContent = remember(customer.id) { customer.id.trim() }
+    val barcodeBitmap = remember(barcodeContent) {
+        BillDocumentEngine.generateCode128BarcodeBitmap(barcodeContent, widthPx = 640, heightPx = 140)
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -474,35 +486,58 @@ fun CustomerQrPassDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         IosSquircleIcon(
-                            icon = Icons.Rounded.QrCode2,
+                            icon = Icons.Rounded.QrCodeScanner,
                             containerColor = EmeraldPrimary,
                             size = 34.dp,
                             iconSize = 18.dp
                         )
-                        Text(
-                            text = "Customer QR Pass",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Column {
+                            Text(
+                                text = "Customer Barcode ID",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Code 128 · Fast Scan",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = "Close")
                     }
                 }
 
-                if (qrBitmap != null) {
+                if (barcodeBitmap != null) {
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = Color.White,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Image(
-                            bitmap = qrBitmap.asImageBitmap(),
-                            contentDescription = "QR code for ${customer.name}",
+                        Column(
                             modifier = Modifier
-                                .padding(14.dp)
-                                .size(200.dp)
-                        )
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Image(
+                                bitmap = barcodeBitmap.asImageBitmap(),
+                                contentDescription = "Code 128 barcode for ${customer.name}",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(78.dp)
+                            )
+                            Text(
+                                text = "ID: $barcodeContent",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                        }
                     }
                 }
 

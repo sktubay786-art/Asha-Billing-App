@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
-import android.graphics.Paint
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.os.CancellationSignal
@@ -25,7 +23,6 @@ import com.example.data.model.formatInr
 import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.util.Locale
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 object InvoicePrinter {
@@ -84,9 +81,9 @@ object InvoicePrinter {
             return
         }
         val dialTarget = if (digits.length == 10) digits else "+$digits"
-        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$dialTarget"))
+        val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$dialTarget"))
         runCatching {
-            context.startActivity(intent)
+            context.startActivity(dialIntent)
         }.onFailure {
             Toast.makeText(context, "Dialer not available", Toast.LENGTH_SHORT).show()
         }
@@ -129,7 +126,8 @@ object InvoicePrinter {
         design: BillDesignModel = BillDesignModel.PREMIUM_GREEN,
         printSize: BillPrintSize = BillPrintSize.THERMAL_80,
         qrMode: String = "Dynamic amount QR",
-        customQrPath: String = ""
+        customQrPath: String = "",
+        bengaliLabels: Boolean = false
     ) {
         val hostContext = context.findActivity() ?: context
         val printManager = hostContext.getSystemService(Context.PRINT_SERVICE) as? PrintManager
@@ -147,7 +145,8 @@ object InvoicePrinter {
             design = design,
             size = printSize,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
 
         val safeName = bill.billNo.ifBlank { "Bill" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")

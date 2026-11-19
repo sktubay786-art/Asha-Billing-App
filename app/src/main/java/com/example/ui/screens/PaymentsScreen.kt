@@ -16,7 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,6 +31,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
@@ -56,16 +61,21 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.Bill
 import com.example.data.model.BillingDashboardData
+import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
 import com.example.data.model.todayIsoDate
+import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.PrintSizePickerDialog
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
+import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldMint
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.PaidBadgeBg
 import com.example.ui.theme.PaidBadgeFg
+import com.example.util.BillPrintSize
 import com.example.util.InvoicePrinter
 import java.util.Locale
 
@@ -88,6 +98,9 @@ fun PaymentsScreen(
         note: String,
         onSaved: () -> Unit
     ) -> Unit,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null,
+    defaultPrintSize: BillPrintSize = BillPrintSize.A4_QUARTER,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -102,6 +115,9 @@ fun PaymentsScreen(
     var selectedMode by remember { mutableStateOf(PaymentMode.CASH) }
     var modeExpanded by remember { mutableStateOf(false) }
     var receivedIn by remember { mutableStateOf("Cash") }
+    var paymentDate by remember { mutableStateOf(todayIsoDate()) }
+    var showPaymentDatePicker by remember { mutableStateOf(false) }
+    var pendingPrintBill by remember { mutableStateOf<Bill?>(null) }
 
     var historySearch by remember { mutableStateOf("") }
     var modeFilter by remember { mutableStateOf<PaymentMode?>(null) }
@@ -340,6 +356,46 @@ fun PaymentsScreen(
                             .testTag("payment_received_in_input")
                     )
 
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Manual Payment Date Picker (always accessible)
+                    Surface(
+                        onClick = { showPaymentDatePicker = true },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("payment_date_picker_button")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Payment Date (Tap to change)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = paymentDate,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Rounded.CalendarMonth,
+                                contentDescription = "Pick payment date",
+                                tint = EmeraldPrimary
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(14.dp))
 
                     // Quick Pill Strip: Full Due | Cash | Online
@@ -423,7 +479,7 @@ fun PaymentsScreen(
                                     selectedBillDue,
                                     selectedMode,
                                     receivedIn,
-                                    todayIsoDate(),
+                                    paymentDate,
                                     ""
                                 ) {
                                     selectedBillId = ""
@@ -460,7 +516,7 @@ fun PaymentsScreen(
                                     selectedBillDue,
                                     PaymentMode.SETTLEMENT,
                                     "Adjusted",
-                                    todayIsoDate(),
+                                    paymentDate,
                                     "Balance settlement"
                                 ) {
                                     selectedBillId = ""
@@ -498,14 +554,7 @@ fun PaymentsScreen(
                             onClick = {
                                 val bill = selectedBill ?: dueBills.firstOrNull()
                                 if (bill != null) {
-                                    InvoicePrinter.printInvoice(
-                                        context = context,
-                                        settings = data.settings,
-                                        bill = bill,
-                                        payments = data.paymentsForBill(bill.id),
-                                        paid = data.paidForBill(bill.id),
-                                        due = data.dueForBill(bill)
-                                    )
+                                    pendingPrintBill = bill
                                 }
                             },
                             enabled = selectedBill != null || dueBills.isNotEmpty(),
@@ -639,26 +688,61 @@ fun PaymentsScreen(
                                             )
                                         }
                                     }
-                                    Column(
-                                        horizontalAlignment = Alignment.End,
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
-                                        Text(
-                                            text = formatInr(payment.amount),
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = PaidBadgeFg,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = if (isSettlement) AmberBadgeBg else PaidBadgeBg
+                                        Column(
+                                            horizontalAlignment = Alignment.End,
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Text(
-                                                text = payment.mode,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = if (isSettlement) AmberBadgeFg else PaidBadgeFg,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                text = formatInr(payment.amount),
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = PaidBadgeFg,
+                                                fontWeight = FontWeight.ExtraBold
                                             )
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isSettlement) AmberBadgeBg else PaidBadgeBg
+                                            ) {
+                                                Text(
+                                                    text = payment.mode,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (isSettlement) AmberBadgeFg else PaidBadgeFg,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                        }
+                                        if (onEditPayment != null) {
+                                            IconButton(
+                                                onClick = { onEditPayment(payment) },
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .testTag("payments_edit_${payment.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Edit,
+                                                    contentDescription = "Edit payment",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                        if (onDeletePayment != null) {
+                                            IconButton(
+                                                onClick = { onDeletePayment(payment) },
+                                                modifier = Modifier
+                                                    .size(34.dp)
+                                                    .testTag("payments_delete_${payment.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.DeleteOutline,
+                                                    contentDescription = "Undo payment",
+                                                    tint = CrimsonDue,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -671,6 +755,33 @@ fun PaymentsScreen(
                 }
             }
         }
+    }
+
+    if (showPaymentDatePicker) {
+        AshaDatePickerDialog(
+            initialDateIso = paymentDate,
+            onDateSelected = { paymentDate = it },
+            onDismiss = { showPaymentDatePicker = false }
+        )
+    }
+
+    pendingPrintBill?.let { billToPrint ->
+        PrintSizePickerDialog(
+            initialSize = defaultPrintSize,
+            onSizeSelected = { chosenSize ->
+                pendingPrintBill = null
+                InvoicePrinter.printInvoice(
+                    context = context,
+                    settings = data.settings,
+                    bill = billToPrint,
+                    payments = data.paymentsForBill(billToPrint.id),
+                    paid = data.paidForBill(billToPrint.id),
+                    due = data.dueForBill(billToPrint),
+                    printSize = chosenSize
+                )
+            },
+            onDismiss = { pendingPrintBill = null }
+        )
     }
 }
 

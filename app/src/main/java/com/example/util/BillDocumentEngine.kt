@@ -1,5 +1,6 @@
 package com.example.util
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -16,6 +17,9 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.text.TextPaint
 import androidx.core.content.FileProvider
 import com.example.data.model.Bill
@@ -24,6 +28,7 @@ import com.example.data.model.Payment
 import com.example.data.model.formatInr
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
+import com.google.zxing.oned.Code128Writer
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.File
 import java.io.FileOutputStream
@@ -96,6 +101,27 @@ enum class BillDesignModel(
         primaryColorInt = 0xFF111827.toInt(),
         secondaryColorInt = 0xFF111827.toInt(),
         accentBgInt = 0xFFF3F4F6.toInt()
+    ),
+    IMPERIAL_TEAL(
+        label = "Imperial Teal Luxe",
+        tagline = "Deep peacock teal & champagne executive trim",
+        primaryColorInt = 0xFF0F766E.toInt(),
+        secondaryColorInt = 0xFF134E4A.toInt(),
+        accentBgInt = 0xFFF0FDFA.toInt()
+    ),
+    SUNSET_SAFFRON(
+        label = "Sunset Saffron Gold",
+        tagline = "Warm amber saffron crest with harvest cream summary",
+        primaryColorInt = 0xFFD97706.toInt(),
+        secondaryColorInt = 0xFF92400E.toInt(),
+        accentBgInt = 0xFFFFFBEB.toInt()
+    ),
+    AMETHYST_LUXE(
+        label = "Amethyst Silk Pro",
+        tagline = "Royal violet-indigo card with lavender glow summary",
+        primaryColorInt = 0xFF6D28D9.toInt(),
+        secondaryColorInt = 0xFF4C1D95.toInt(),
+        accentBgInt = 0xFFF5F3FF.toInt()
     );
 
     companion object {
@@ -135,13 +161,13 @@ enum class BillPrintSize(
     val isFourUpA4: Boolean = false,
     val isFullA4: Boolean = false
 ) {
-    THERMAL_80("Thermal · 80 mm", 680, 227),
-    THERMAL_58("Thermal · 58 mm", 500, 164),
-    A4_HALF("A4 · 1/2 Page", 760, 595, isHalfA4 = true),
-    A4_QUARTER("A4 · 1/4 Page", 680, 595, isQuarterA4 = true),
-    A4_FOUR_UP("A4 · 4x Grid", 680, 595, isFourUpA4 = true),
-    A4_INVOICE("A4 · Full Page", 840, 595, isFullA4 = true),
-    COMPACT_A6("Compact A6 · Normal", 580, 298);
+    THERMAL_80("Thermal · 80 mm", 760, 227),
+    THERMAL_58("Thermal · 58 mm", 560, 164),
+    A4_HALF("A4 · 1/2 Page", 1180, 595, isHalfA4 = true),
+    A4_QUARTER("A4 · 1/4 Page", 1080, 595, isQuarterA4 = true),
+    A4_FOUR_UP("A4 · 4x Grid", 1020, 595, isFourUpA4 = true),
+    A4_INVOICE("A4 · Full Page", 1280, 595, isFullA4 = true),
+    COMPACT_A6("Compact A6 · Normal", 720, 298);
 
     companion object {
         fun fromLabel(raw: String): BillPrintSize {
@@ -158,7 +184,7 @@ object BillDocumentEngine {
 
     private val qrBitmapCache = object : android.util.LruCache<String, Bitmap>(16) {}
 
-    fun generateQrBitmap(content: String, sizePx: Int = 260): Bitmap? {
+    fun generateQrBitmap(content: String, sizePx: Int = 360): Bitmap? {
         if (content.isBlank()) return null
         val cacheKey = "$sizePx|$content"
         synchronized(qrBitmapCache) {
@@ -176,6 +202,41 @@ object BillDocumentEngine {
             }
             val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
             bmp.setPixels(pixels, 0, sizePx, 0, 0, sizePx, sizePx)
+            synchronized(qrBitmapCache) {
+                qrBitmapCache.put(cacheKey, bmp)
+            }
+            bmp
+        }.getOrNull()
+    }
+
+    /**
+     * Generates a crisp, compact horizontal 1D Code 128 barcode (used for short Customer IDs).
+     */
+    fun generateCode128BarcodeBitmap(
+        content: String,
+        widthPx: Int = 560,
+        heightPx: Int = 96
+    ): Bitmap? {
+        val clean = content.trim()
+        if (clean.isBlank()) return null
+        val cacheKey = "C128|$widthPx|$heightPx|$clean"
+        synchronized(qrBitmapCache) {
+            qrBitmapCache.get(cacheKey)?.let { if (!it.isRecycled) return it }
+        }
+        return runCatching {
+            val hints = mapOf(EncodeHintType.MARGIN to 4)
+            val matrix = Code128Writer().encode(clean, BarcodeFormat.CODE_128, widthPx, heightPx, hints)
+            val w = matrix.width
+            val h = matrix.height
+            val pixels = IntArray(w * h)
+            var offset = 0
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    pixels[offset++] = if (matrix.get(x, y)) Color.BLACK else Color.WHITE
+                }
+            }
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bmp.setPixels(pixels, 0, w, 0, 0, w, h)
             synchronized(qrBitmapCache) {
                 qrBitmapCache.put(cacheKey, bmp)
             }
@@ -204,7 +265,7 @@ object BillDocumentEngine {
                 ""
             }
             val uri = "upi://pay?pa=$upiId&pn=$payee&cu=INR$amountParam"
-            return generateQrBitmap(uri, 260)
+            return generateQrBitmap(uri, 360)
         }
         if (customQrPath.isNotBlank()) {
             val file = File(customQrPath)
@@ -224,8 +285,10 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String = "Dynamic amount QR",
-        customQrPath: String = ""
+        customQrPath: String = "",
+        bengaliLabels: Boolean = false
     ): Bitmap {
+        val useBengali = bengaliLabels || design == BillDesignModel.BENGALI_HERITAGE
         return when (design) {
             BillDesignModel.PREMIUM_GREEN,
             BillDesignModel.ROYAL_GOLD,
@@ -233,7 +296,10 @@ object BillDocumentEngine {
             BillDesignModel.SAPPHIRE_GLASS,
             BillDesignModel.ROSE_VELVET,
             BillDesignModel.BENGALI_HERITAGE,
-            BillDesignModel.QR_FOCUSED -> renderSectionedCardStyle(
+            BillDesignModel.QR_FOCUSED,
+            BillDesignModel.IMPERIAL_TEAL,
+            BillDesignModel.SUNSET_SAFFRON,
+            BillDesignModel.AMETHYST_LUXE -> renderSectionedCardStyle(
                 settings = settings,
                 bill = bill,
                 payments = payments,
@@ -242,7 +308,8 @@ object BillDocumentEngine {
                 design = design,
                 size = size,
                 qrMode = qrMode,
-                customQrPath = customQrPath
+                customQrPath = customQrPath,
+                isBengali = useBengali
             )
             BillDesignModel.THERMAL_COMPACT -> renderClassicOrThermalStyle(
                 settings = settings,
@@ -253,14 +320,15 @@ object BillDocumentEngine {
                 design = design,
                 size = size,
                 qrMode = qrMode,
-                customQrPath = customQrPath
+                customQrPath = customQrPath,
+                isBengali = useBengali
             )
         }
     }
 
     /**
      * Renders the beloved sectioned rounded-card bill style inspired by the user's reference photo
-     * (Emerald/Gold/Midnight/Ocean/Bengali/QR-Focused variants) + handwritten owner signature & date.
+     * (Emerald/Gold/Midnight/Sapphire/Ruby/Bengali/QR-Focused/Teal/Saffron/Amethyst) + handwritten signature.
      */
     private fun renderSectionedCardStyle(
         settings: BusinessSettings,
@@ -271,7 +339,8 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String,
-        customQrPath: String
+        customQrPath: String,
+        isBengali: Boolean
     ): Bitmap {
         val w = size.widthPx
         val scale = w / 680f
@@ -280,7 +349,10 @@ object BillDocumentEngine {
         val innerPad = dp(18f)
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
-        val isBengali = design == BillDesignModel.BENGALI_HERITAGE
+        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeBitmap = customerBarcodeId?.let {
+            generateCode128BarcodeBitmap(it, widthPx = dp(420f).roundToInt().coerceAtLeast(360), heightPx = dp(64f).roundToInt().coerceAtLeast(56))
+        }
         val isQrHero = design == BillDesignModel.QR_FOCUSED
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
@@ -309,6 +381,9 @@ object BillDocumentEngine {
         if (!isQrHero && qrBitmap != null) {
             estH += dp(14f) + dp(236f) // Payment QR card
         }
+        if (customerBarcodeBitmap != null) {
+            estH += dp(12f) + dp(86f) // Compact horizontal 1D Code 128 Customer ID barcode
+        }
         estH += dp(16f) + dp(96f) // Handwritten signature + date + footer
         if (size.isFullA4) {
             estH = max(estH, w * 1.38f)
@@ -322,7 +397,11 @@ object BillDocumentEngine {
         // Outer subtle colored border frame (+ gold inner double frame for luxury editions)
         val isRoyalGold = design == BillDesignModel.ROYAL_GOLD
         val isMidnight = design == BillDesignModel.MIDNIGHT_PREMIUM
-        val hasLuxuryDoubleTrim = isRoyalGold || isMidnight || isBengali || design == BillDesignModel.ROSE_VELVET
+        val hasLuxuryDoubleTrim = isRoyalGold || isMidnight || isBengali ||
+            design == BillDesignModel.ROSE_VELVET ||
+            design == BillDesignModel.IMPERIAL_TEAL ||
+            design == BillDesignModel.SUNSET_SAFFRON ||
+            design == BillDesignModel.AMETHYST_LUXE
         val outerBorderRect = RectF(dp(8f), dp(8f), w - dp(8f), h - dp(8f))
         val outerFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -520,7 +599,7 @@ object BillDocumentEngine {
 
         var chy = chargeRect.top + dp(56f)
         if (hasLand) {
-            drawCardKeyVal(chargeRect.left, chargeRect.right, chy, if (isBengali) "মরশুম (Season)" else "Season", bill.season.ifBlank { "—" })
+            drawCardKeyVal(chargeRect.left, chargeRect.right, chy, if (isBengali) "সিজন" else "Season", bill.season.ifBlank { "—" })
             chy += dp(36f)
             drawCardKeyVal(
                 chargeRect.left,
@@ -530,11 +609,17 @@ object BillDocumentEngine {
                 "${String.format(Locale.US, "%.2f", bill.bigha)} Bigha (${formatQty(bill.landAmount)} ${bill.unit})"
             )
             chy += dp(36f)
-            drawCardKeyVal(chargeRect.left, chargeRect.right, chy, if (isBengali) "দর / বিঘা" else "Rate", "${formatInr(bill.rate)}/বিঘা")
+            drawCardKeyVal(
+                chargeRect.left,
+                chargeRect.right,
+                chy,
+                if (isBengali) "রেট" else "Rate",
+                if (isBengali) "${formatInr(bill.rate)}/বিঘা" else "${formatInr(bill.rate)}/Bigha"
+            )
             chy += dp(36f)
             drawCardKeyVal(chargeRect.left, chargeRect.right, chy, if (isBengali) "বর্তমান বিল" else "Current Bill", formatInr(bill.current), drawLine = false)
         } else {
-            drawCardKeyVal(chargeRect.left, chargeRect.right, chy, "Bill Type", "Previous Due Recovery", drawLine = false)
+            drawCardKeyVal(chargeRect.left, chargeRect.right, chy, if (isBengali) "বিলের ধরন" else "Bill Type", if (isBengali) "জের বাকি হিসাব" else "Previous Due Recovery", drawLine = false)
         }
         y += chargeH + dp(14f)
 
@@ -550,14 +635,14 @@ object BillDocumentEngine {
         }
         canvas.drawRoundRect(paySumRect, dp(16f), dp(16f), accentFillPaint)
         canvas.drawRoundRect(paySumRect, dp(16f), dp(16f), accentBorderPaint)
-        canvas.drawText(if (isBengali) "হিসাব সারসংক্ষেপ" else "PAYMENT SUMMARY", paySumRect.left + dp(16f), paySumRect.top + dp(26f), sectionCapPaint)
+        canvas.drawText(if (isBengali) "পেমেন্ট সারসংক্ষেপ" else "PAYMENT SUMMARY", paySumRect.left + dp(16f), paySumRect.top + dp(26f), sectionCapPaint)
 
         var py = paySumRect.top + dp(58f)
-        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "আগের বাকি" else "Previous Due", formatInr(bill.previousDue), drawLine = false)
+        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue), drawLine = false)
         py += dp(34f)
-        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "মোট বিল" else "Total Amount", formatInr(bill.allTotal), drawLine = false)
+        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "মোট মূল্য" else "Total Amount", formatInr(bill.allTotal), drawLine = false)
         py += dp(34f)
-        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জমা (Paid)" else "Paid / Joma", formatInr(paid), drawLine = false, vColor = 0xFF15803D.toInt())
+        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জমা" else "Paid", formatInr(paid), drawLine = false, vColor = 0xFF15803D.toInt())
         py += dp(40f)
 
         val dueTitlePaint = TextPaint(valPaint).apply { textSize = dp(20f) }
@@ -565,7 +650,7 @@ object BillDocumentEngine {
             textSize = dp(22f)
             color = dueColor
         }
-        val dueLabelText = if (isBengali) "মোট বাকি (Due)" else "Payable Due"
+        val dueLabelText = if (isBengali) "মোট বাকি" else "Payable Due"
         canvas.drawText(dueLabelText, paySumRect.left + dp(16f), py, dueTitlePaint)
         val dvw = dueValPaint.measureText(formatInr(due))
         canvas.drawText(formatInr(due), paySumRect.right - dp(16f) - dvw, py, dueValPaint)
@@ -602,6 +687,27 @@ object BillDocumentEngine {
             y = drawQrCardBlock(y)
         }
 
+        // Compact 1D Code 128 Barcode for Customer ID (fast camera lookup)
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            val bcH = dp(84f)
+            val bcRect = RectF(outerPad, y, w - outerPad, y + bcH)
+            canvas.drawRoundRect(bcRect, dp(14f), dp(14f), boxStrokePaint)
+            val barW = dp(340f).roundToInt()
+            val barH = dp(48f).roundToInt()
+            val barLeft = (bcRect.centerX() - barW / 2f).roundToInt()
+            val barTop = (bcRect.top + dp(10f)).roundToInt()
+            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(barLeft, barTop, barLeft + barW, barTop + barH), null)
+            val idPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = mutedColor
+                textSize = dp(11.5f)
+                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            }
+            val idText = "CUSTOMER ID · $customerBarcodeId"
+            val idW = idPaint.measureText(idText)
+            canvas.drawText(idText, bcRect.centerX() - idW / 2f, bcRect.bottom - dp(10f), idPaint)
+            y += bcH + dp(12f)
+        }
+
         // 6. Bengali Thank You / Reminder Footer + Handwritten Owner Signature with Date
         drawHandwrittenOwnerSignatureSection(
             canvas = canvas,
@@ -630,7 +736,8 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String,
-        customQrPath: String
+        customQrPath: String,
+        isBengali: Boolean
     ): Bitmap {
         val w = size.widthPx
         val scale = w / 680f
@@ -639,6 +746,10 @@ object BillDocumentEngine {
         val isThermal = design == BillDesignModel.THERMAL_COMPACT
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
+        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeBitmap = customerBarcodeId?.let {
+            generateCode128BarcodeBitmap(it, widthPx = dp(400f).roundToInt().coerceAtLeast(340), heightPx = dp(58f).roundToInt().coerceAtLeast(52))
+        }
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
         val paymentRowsCount = minOf(payments.size, 5)
@@ -649,6 +760,7 @@ object BillDocumentEngine {
         estH += dp(155f)
         if (paymentRowsCount > 0) estH += dp(64f) + paymentRowsCount * dp(30f)
         if (qrBitmap != null) estH += dp(175f)
+        if (customerBarcodeBitmap != null) estH += dp(88f)
         if (hasNote) estH += dp(48f)
         estH += dp(115f) // Handwritten owner signature + date
         if (size.isFullA4) {
@@ -783,13 +895,19 @@ object BillDocumentEngine {
         }
 
         if (hasLand) {
-            drawKV("Land (${bill.unit.uppercase()})", "${formatQty(bill.landAmount)} ${bill.unit} (${String.format(Locale.US, "%.2f", bill.bigha)} Bigha)")
-            drawKV("Rate / Bigha", formatInr(bill.rate))
-            drawKV("Current Bill", formatInr(bill.current))
+            if (bill.season.isNotBlank()) {
+                drawKV(if (isBengali) "সিজন" else "Season", bill.season)
+            }
+            drawKV(
+                if (isBengali) "জমির পরিমাণ" else "Land (${bill.unit.uppercase()})",
+                "${formatQty(bill.landAmount)} ${bill.unit} (${String.format(Locale.US, "%.2f", bill.bigha)} Bigha)"
+            )
+            drawKV(if (isBengali) "রেট" else "Rate / Bigha", formatInr(bill.rate))
+            drawKV(if (isBengali) "বর্তমান বিল" else "Current Bill", formatInr(bill.current))
         } else {
-            drawKV("Bill Type", "Previous Due Recovery")
+            drawKV(if (isBengali) "বিলের ধরন" else "Bill Type", if (isBengali) "জের বাকি হিসাব" else "Previous Due Recovery")
         }
-        drawKV("Previous Due", formatInr(bill.previousDue))
+        drawKV(if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue))
 
         // Summary box
         val sumH = dp(124f)
@@ -808,9 +926,14 @@ object BillDocumentEngine {
             canvas.drawText(valText, sumRect.right - dp(14f) - vw, sy, vp)
             sy += dp(30f)
         }
-        drawSumRow("Grand Total", formatInr(bill.allTotal), primaryColor, big = true)
-        drawSumRow("Paid", formatInr(paid), 0xFF14764E.toInt())
-        drawSumRow(if (due > 0.001) "Balance Due" else "Paid in Full", formatInr(due), dueColor, big = true)
+        drawSumRow(if (isBengali) "মোট মূল্য" else "Grand Total", formatInr(bill.allTotal), primaryColor, big = true)
+        drawSumRow(if (isBengali) "জমা" else "Paid", formatInr(paid), 0xFF14764E.toInt())
+        drawSumRow(
+            if (isBengali) "মোট বাকি" else if (due > 0.001) "Balance Due" else "Paid in Full",
+            formatInr(due),
+            dueColor,
+            big = true
+        )
         y += sumH + dp(16f)
 
         if (paymentRowsCount > 0) {
@@ -851,6 +974,22 @@ object BillDocumentEngine {
                 canvas.drawText("Payable: ${formatInr(due)}", tx, qrRect.top + dp(118f), ap)
             }
             y += qrBoxH + dp(14f)
+        }
+
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            val barW = dp(320f).roundToInt()
+            val barH = dp(46f).roundToInt()
+            val barLeft = ((w - barW) / 2f).roundToInt()
+            val barTop = y.roundToInt()
+            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(barLeft, barTop, barLeft + barW, barTop + barH), null)
+            val idPaint = TextPaint(mutedPaint).apply {
+                textSize = dp(11.5f)
+                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            }
+            val idText = "ID: $customerBarcodeId"
+            val idW = idPaint.measureText(idText)
+            canvas.drawText(idText, (w - idW) / 2f, barTop + barH + dp(16f), idPaint)
+            y += dp(76f)
         }
 
         if (hasNote) {
@@ -987,7 +1126,7 @@ object BillDocumentEngine {
         size: BillPrintSize
     ) {
         canvas.drawColor(Color.WHITE)
-        val filterPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+        val filterPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
 
         when {
             size.isHalfA4 -> {
@@ -1089,7 +1228,8 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String,
-        customQrPath: String
+        customQrPath: String,
+        bengaliLabels: Boolean = false
     ) {
         val billBitmap = renderBillBitmap(
             settings = settings,
@@ -1100,11 +1240,12 @@ object BillDocumentEngine {
             design = design,
             size = size,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
         val pdfWidth = size.pdfWidthPt
         val pdfHeight = when {
-            size.isHalfA4 || size.isQuarterA4 || size.isFourUpA4 || size.isFullA4 -> 842 // Exact ISO A4 height in pt (595x842)
+            size.isHalfA4 || size.isQuarterA4 || size.isFourUpA4 || size.isFullA4 -> 842
             else -> ((billBitmap.height.toFloat() / billBitmap.width.toFloat()) * pdfWidth)
                 .roundToInt()
                 .coerceAtLeast(300)
@@ -1129,6 +1270,103 @@ object BillDocumentEngine {
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
     }
 
+    /**
+     * Zero-permission direct export to public Downloads/ASHA_Bills/ on Android 10+ (API 29+).
+     * Returns Result.success(Uri) so users can download PDF invoices directly on mobile.
+     */
+    fun saveBillPdfToDownloads(
+        context: Context,
+        settings: BusinessSettings,
+        bill: Bill,
+        payments: List<Payment>,
+        paid: Double,
+        due: Double,
+        design: BillDesignModel,
+        size: BillPrintSize,
+        qrMode: String,
+        customQrPath: String,
+        bengaliLabels: Boolean = false
+    ): Result<Uri> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return Result.failure(IllegalStateException("Use system file picker on Android 9 or earlier"))
+        }
+        val safeBill = bill.billNo.ifBlank { "Bill" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val safeName = bill.customerName.ifBlank { "Customer" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val fileName = "ASHA_${safeBill}_${safeName}_${bill.date}.pdf"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ASHA_Bills")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        var uri: Uri? = null
+        return runCatching {
+            uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Could not create Downloads entry")
+            val targetUri = uri!!
+            resolver.openOutputStream(targetUri)?.use { out ->
+                writeBillPdfToStream(
+                    outputStream = out,
+                    settings = settings,
+                    bill = bill,
+                    payments = payments,
+                    paid = paid,
+                    due = due,
+                    design = design,
+                    size = size,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliLabels
+                )
+            } ?: error("Failed to open download output stream")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(targetUri, values, null, null)
+            targetUri
+        }.onFailure {
+            uri?.let { partial -> runCatching { resolver.delete(partial, null, null) } }
+        }
+    }
+
+    /**
+     * Zero-permission direct PNG bill image save into public Downloads/ASHA_Bills/ on Android 10+ (API 29+).
+     */
+    fun saveBillPngToDownloads(
+        context: Context,
+        bitmap: Bitmap,
+        bill: Bill
+    ): Result<Uri> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return Result.failure(IllegalStateException("Use system file picker on Android 9 or earlier"))
+        }
+        val safeBill = bill.billNo.ifBlank { "Bill" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val safeName = bill.customerName.ifBlank { "Customer" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val fileName = "ASHA_${safeBill}_${safeName}_${bill.date}.png"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "image/png")
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ASHA_Bills")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        var uri: Uri? = null
+        return runCatching {
+            uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Could not create Downloads entry")
+            val targetUri = uri!!
+            resolver.openOutputStream(targetUri)?.use { out ->
+                writeBillPngToStream(out, bitmap)
+            } ?: error("Failed to open download output stream")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(targetUri, values, null, null)
+            targetUri
+        }.onFailure {
+            uri?.let { partial -> runCatching { resolver.delete(partial, null, null) } }
+        }
+    }
+
     fun shareBillImageWithReminder(
         context: Context,
         settings: BusinessSettings,
@@ -1139,7 +1377,8 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String,
-        customQrPath: String
+        customQrPath: String,
+        bengaliLabels: Boolean = false
     ) {
         val uri = renderCachedBillImageUri(
             context = context,
@@ -1151,7 +1390,8 @@ object BillDocumentEngine {
             design = design,
             size = size,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
         val reminderMsg = buildBillReminderMessage(settings, bill, due)
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -1174,7 +1414,8 @@ object BillDocumentEngine {
         design: BillDesignModel = BillDesignModel.PREMIUM_GREEN,
         size: BillPrintSize = BillPrintSize.THERMAL_80,
         qrMode: String = "Dynamic amount QR",
-        customQrPath: String = ""
+        customQrPath: String = "",
+        bengaliLabels: Boolean = false
     ) {
         val uri = renderCachedBillImageUri(
             context = context,
@@ -1186,7 +1427,8 @@ object BillDocumentEngine {
             design = design,
             size = size,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
         val reminderMsg = buildBillReminderMessage(settings, bill, due)
         val waDigits = InvoicePrinter.normalizeWhatsAppDigits(bill.phone)
@@ -1242,7 +1484,8 @@ object BillDocumentEngine {
         design: BillDesignModel,
         size: BillPrintSize,
         qrMode: String,
-        customQrPath: String
+        customQrPath: String,
+        bengaliLabels: Boolean = false
     ): Uri {
         val bitmap = renderBillBitmap(
             settings = settings,
@@ -1253,7 +1496,8 @@ object BillDocumentEngine {
             design = design,
             size = size,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
         val cacheDir = File(context.cacheDir, "bills").apply { mkdirs() }
         val file = File(cacheDir, "ASHA_${bill.billNo.replace(Regex("[^a-zA-Z0-9_-]"), "_")}.png")

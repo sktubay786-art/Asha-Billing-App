@@ -63,6 +63,7 @@ data class Customer(
     val address: String = "",
     val openingDue: Double = 0.0,
     val landArea: String = "",
+    val landUnit: String = LandUnit.DECIMAL.key,
     val landOwnerType: String = "Own",
     val landOwnerName: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -71,8 +72,21 @@ data class Customer(
     fun normalizedOwnerType(): String =
         if (landOwnerType.equals("Other", ignoreCase = true)) "Other" else "Own"
 
+    fun normalizedLandUnit(): LandUnit = LandUnit.fromKey(landUnit)
+
     fun landSummaryLabel(): String {
-        val area = landArea.trim()
+        val rawArea = landArea.trim()
+        val unitLabel = normalizedLandUnit().label
+        val area = when {
+            rawArea.isBlank() -> ""
+            rawArea.contains("decimal", ignoreCase = true) ||
+                rawArea.contains("katha", ignoreCase = true) ||
+                rawArea.contains("bigha", ignoreCase = true) ||
+                rawArea.contains("শতক") ||
+                rawArea.contains("কাঠা") ||
+                rawArea.contains("বিঘা") -> rawArea
+            else -> "$rawArea $unitLabel"
+        }
         val owner = if (normalizedOwnerType() == "Other") {
             landOwnerName.trim().ifBlank { "Other Owner" }
         } else {
@@ -92,8 +106,9 @@ data class Customer(
         "phone" to phone.trim().take(40),
         "village" to village.trim().take(120),
         "address" to address.trim().take(250),
-        "openingDue" to max(0.0, openingDue),
+        "openingDue" to roundMoney(max(0.0, openingDue)),
         "landArea" to landArea.trim().take(120),
+        "landUnit" to normalizedLandUnit().key,
         "landOwnerType" to normalizedOwnerType(),
         "landOwnerName" to (if (normalizedOwnerType() == "Other") landOwnerName.trim().take(120) else ""),
         "createdAt" to FieldValue.serverTimestamp(),
@@ -105,8 +120,9 @@ data class Customer(
         "phone" to phone.trim().take(40),
         "village" to village.trim().take(120),
         "address" to address.trim().take(250),
-        "openingDue" to max(0.0, openingDue),
+        "openingDue" to roundMoney(max(0.0, openingDue)),
         "landArea" to landArea.trim().take(120),
+        "landUnit" to normalizedLandUnit().key,
         "landOwnerType" to normalizedOwnerType(),
         "landOwnerName" to (if (normalizedOwnerType() == "Other") landOwnerName.trim().take(120) else ""),
         "updatedAt" to FieldValue.serverTimestamp()
@@ -151,11 +167,25 @@ data class Bill(
         "unit" to LandUnit.fromKey(unit).key,
         "bigha" to max(0.0, bigha),
         "rate" to max(0.0, rate),
-        "current" to max(0.0, current),
-        "previousDue" to max(0.0, previousDue),
-        "allTotal" to allTotal,
+        "current" to roundMoney(max(0.0, current)),
+        "previousDue" to roundMoney(max(0.0, previousDue)),
+        "allTotal" to roundMoney(allTotal),
         "note" to note.trim().take(500),
         "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toUpdateMap(): Map<String, Any> = mapOf(
+        "date" to date.trim().take(24),
+        "season" to season.trim().take(120),
+        "landAmount" to max(0.0, landAmount),
+        "unit" to LandUnit.fromKey(unit).key,
+        "bigha" to max(0.0, bigha),
+        "rate" to roundMoney(max(0.0, rate)),
+        "current" to roundMoney(max(0.0, current)),
+        "previousDue" to roundMoney(max(0.0, previousDue)),
+        "allTotal" to roundMoney(max(0.0, allTotal)),
+        "note" to note.trim().take(500),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 }
@@ -180,11 +210,48 @@ data class Payment(
         "billId" to billId,
         "customerId" to customerId,
         "date" to date.trim().take(24),
-        "amount" to amount,
+        "amount" to roundMoney(amount),
         "mode" to PaymentMode.fromLabel(mode).label,
         "receivedIn" to receivedIn.trim().take(80),
         "note" to note.trim().take(500),
         "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toUpdateMap(): Map<String, Any> = mapOf(
+        "date" to date.trim().take(24),
+        "amount" to roundMoney(amount),
+        "mode" to PaymentMode.fromLabel(mode).label,
+        "receivedIn" to receivedIn.trim().take(80),
+        "note" to note.trim().take(500),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+}
+
+@Keep
+@IgnoreExtraProperties
+data class ChatMessage(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val customerId: String = "",
+    val text: String = "",
+    val sender: String = "ME",
+    val date: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun toCreateMap(ownerUid: String): Map<String, Any> = mapOf(
+        "userId" to ownerUid,
+        "customerId" to customerId,
+        "text" to text.trim().take(1000),
+        "sender" to if (sender == "CUSTOMER") "CUSTOMER" else "ME",
+        "date" to date.trim().ifBlank { todayIsoDate() }.take(24),
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toUpdateMap(): Map<String, Any> = mapOf(
+        "text" to text.trim().take(1000),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 }
@@ -245,6 +312,71 @@ data class Expense(
     }
 }
 
+@Keep
+@IgnoreExtraProperties
+data class WbsedclConsumer(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val consumerNo: String = "",
+    val label: String = "",
+    val installationNote: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun toCreateMap(ownerUid: String): Map<String, Any> = mapOf(
+        "userId" to ownerUid,
+        "consumerNo" to consumerNo.trim().take(40),
+        "label" to label.trim().take(80),
+        "installationNote" to installationNote.trim().take(200),
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toUpdateMap(): Map<String, Any> = mapOf(
+        "consumerNo" to consumerNo.trim().take(40),
+        "label" to label.trim().take(80),
+        "installationNote" to installationNote.trim().take(200),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+}
+
+@Keep
+@IgnoreExtraProperties
+data class WbsedclBillPayment(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val consumerNo: String = "",
+    val consumerLabel: String = "",
+    val billMonth: String = "",
+    val amount: Double = 0.0,
+    val date: String = "",
+    val note: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun toCreateMap(ownerUid: String): Map<String, Any> = mapOf(
+        "userId" to ownerUid,
+        "consumerNo" to consumerNo.trim().take(40),
+        "consumerLabel" to consumerLabel.trim().take(80),
+        "billMonth" to billMonth.trim().take(40),
+        "amount" to roundMoney(max(0.0, amount)),
+        "date" to date.trim().ifBlank { todayIsoDate() }.take(24),
+        "note" to note.trim().take(500),
+        "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toUpdateMap(): Map<String, Any> = mapOf(
+        "consumerNo" to consumerNo.trim().take(40),
+        "consumerLabel" to consumerLabel.trim().take(80),
+        "billMonth" to billMonth.trim().take(40),
+        "amount" to roundMoney(max(0.0, amount)),
+        "date" to date.trim().ifBlank { todayIsoDate() }.take(24),
+        "note" to note.trim().take(500),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+}
+
 enum class LandUnit(val key: String, val label: String, val perBigha: Double) {
     DECIMAL("decimal", "Decimal", 40.0),
     KATHA("katha", "Katha", 20.0),
@@ -282,24 +414,32 @@ data class BillingDashboardData(
     val customers: List<Customer> = emptyList(),
     val bills: List<Bill> = emptyList(),
     val payments: List<Payment> = emptyList(),
-    val expenses: List<Expense> = emptyList()
+    val expenses: List<Expense> = emptyList(),
+    val chatMessages: List<ChatMessage> = emptyList(),
+    val wbsedclConsumers: List<WbsedclConsumer> = emptyList(),
+    val wbsedclPayments: List<WbsedclBillPayment> = emptyList()
 ) {
     private val paymentsByBill: Map<String, List<Payment>> = payments.groupBy { it.billId }
+
+    fun chatMessagesForCustomer(customerId: String): List<ChatMessage> =
+        chatMessages
+            .filter { it.customerId == customerId }
+            .sortedWith(compareBy<ChatMessage> { it.date }.thenBy { it.createdAt?.toDate()?.time ?: 0L })
 
     fun paymentsForBill(billId: String): List<Payment> =
         paymentsByBill[billId].orEmpty().sortedBy { it.date }
 
     fun paidForBill(billId: String): Double =
-        paymentsByBill[billId].orEmpty().sumOf { it.amount }
+        roundMoney(paymentsByBill[billId].orEmpty().sumOf { it.amount })
 
     fun dueForBill(bill: Bill): Double =
-        max(0.0, bill.allTotal - paidForBill(bill.id))
+        roundMoney(max(0.0, bill.allTotal - paidForBill(bill.id)))
 
     fun statusForBill(bill: Bill): BillStatus {
         val due = dueForBill(bill)
         val paid = paidForBill(bill.id)
         return when {
-            due <= 0.001 -> BillStatus.PAID
+            due <= 0.009 -> BillStatus.PAID
             paid > 0.0 -> BillStatus.PARTIAL
             else -> BillStatus.DUE
         }
@@ -311,30 +451,35 @@ data class BillingDashboardData(
     fun dueForCustomer(customerId: String): Double {
         val opening = customers.firstOrNull { it.id == customerId }?.openingDue ?: 0.0
         val billsDue = bills.filter { it.customerId == customerId }.sumOf { dueForBill(it) }
-        return opening + billsDue
+        return roundMoney(opening + billsDue)
     }
 
     val totalBilled: Double
-        get() = bills.sumOf { it.allTotal }
+        get() = roundMoney(bills.sumOf { it.allTotal })
 
     val totalCollected: Double
-        get() = bills.sumOf { paidForBill(it.id) }
+        get() = roundMoney(bills.sumOf { paidForBill(it.id) })
 
     val totalOutstanding: Double
-        get() = customers.sumOf { dueForCustomer(it.id) }
+        get() = roundMoney(customers.sumOf { dueForCustomer(it.id) })
 
     val totalExpenses: Double
-        get() = expenses.sumOf { it.amount }
+        get() = roundMoney(expenses.sumOf { it.amount })
 
     val netCollectedProfit: Double
-        get() = totalCollected - totalExpenses
+        get() = roundMoney(totalCollected - totalExpenses)
 
     val projectedNetProfit: Double
-        get() = totalBilled - totalExpenses
+        get() = roundMoney(totalBilled - totalExpenses)
+
+    val totalWbsedclSpent: Double
+        get() = roundMoney(wbsedclPayments.sumOf { it.amount })
 
     val collectionPercent: Int
         get() = if (totalBilled <= 0.0) 0 else ((totalCollected / totalBilled) * 100.0).toInt().coerceIn(0, 100)
 }
+
+fun roundMoney(v: Double): Double = kotlin.math.round(v * 100.0) / 100.0
 
 fun calculateBigha(amount: Double, unit: LandUnit): Double {
     if (amount <= 0.0) return 0.0

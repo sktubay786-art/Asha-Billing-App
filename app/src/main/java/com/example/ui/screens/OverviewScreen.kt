@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -22,19 +25,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.TrendingDown
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.ElectricBolt
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.People
-import androidx.compose.material.icons.rounded.TrendingDown
-import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -72,10 +76,13 @@ import com.example.data.model.Customer
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BillRowItem
+import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.components.PremiumCalculatorIcon
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
+import com.example.ui.theme.BmwMetricNumberStyle
+import com.example.ui.theme.BmwTelemetryStyle
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldMint
@@ -112,6 +119,7 @@ fun OverviewScreen(
     onOpenCustomerChat: (Customer) -> Unit,
     onReceivePayment: () -> Unit,
     onOpenCalculator: () -> Unit,
+    onOpenWbsedcl: () -> Unit = {},
     onOpenExpenses: () -> Unit = {},
     onOpenMonthlyAnalytics: () -> Unit = {},
     onViewHistory: () -> Unit,
@@ -164,6 +172,11 @@ fun OverviewScreen(
         filteredBills.sumOf { data.dueForBill(it) }
     }
     val collectionRatio = if (totalBilled > 0.0) (totalCollected / totalBilled).toFloat().coerceIn(0f, 1f) else 0f
+    val animatedCollectionRatio by animateFloatAsState(
+        targetValue = collectionRatio,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "overview_collection_ratio"
+    )
     val recentBills = filteredBills.sortedByDescending { it.date }.take(5)
 
     val villageSummaries = remember(data.customers, data.bills, data.payments) {
@@ -196,16 +209,28 @@ fun OverviewScreen(
         // V103 Top Dashboard Header + Filters + Collection Bar Card
         item {
             AshaPanelCard {
+                BmwPrecisionStripe(
+                    height = 2.5.dp,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Overview",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            text = "COMMAND DECK",
+                            style = BmwTelemetryStyle,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Overview",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -358,7 +383,7 @@ fun OverviewScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.TrendingUp,
+                                    imageVector = Icons.AutoMirrored.Rounded.TrendingUp,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
@@ -377,7 +402,7 @@ fun OverviewScreen(
                             )
                         }
                         LinearProgressIndicator(
-                            progress = { collectionRatio },
+                            progress = { animatedCollectionRatio },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(7.dp)
@@ -430,6 +455,11 @@ fun OverviewScreen(
             val isProfit = netProfit >= 0.0
             val denom = (allCollected + totalExp).coerceAtLeast(1.0)
             val collectedShare = (allCollected / denom).toFloat().coerceIn(0f, 1f)
+            val animatedCollectedShare by animateFloatAsState(
+                targetValue = collectedShare,
+                animationSpec = spring(stiffness = Spring.StiffnessLow),
+                label = "overview_pnl_share"
+            )
 
             AshaPanelCard(
                 modifier = Modifier.testTag("overview_profit_loss_card")
@@ -444,16 +474,22 @@ fun OverviewScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         IosSquircleIcon(
-                            icon = if (isProfit) Icons.Rounded.TrendingUp else Icons.Rounded.TrendingDown,
+                            icon = if (isProfit) Icons.AutoMirrored.Rounded.TrendingUp else Icons.AutoMirrored.Rounded.TrendingDown,
                             containerColor = if (isProfit) PaidBadgeFg else CrimsonDue,
-                            size = 36.dp,
-                            iconSize = 19.dp
+                            size = 38.dp,
+                            iconSize = 20.dp
                         )
                         Column {
                             Text(
+                                text = "FINANCIAL TELEMETRY",
+                                style = BmwTelemetryStyle,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
                                 text = "Profit & Loss",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.ExtraBold
                             )
                             Text(
                                 text = "${data.expenses.size} expenses logged",
@@ -514,7 +550,7 @@ fun OverviewScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 LinearProgressIndicator(
-                    progress = { collectedShare },
+                    progress = { animatedCollectedShare },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(7.dp)
@@ -603,17 +639,36 @@ fun OverviewScreen(
                             .testTag("quick_monthly_chart_button")
                     )
                 }
-                V103ActionTile(
-                    icon = Icons.Rounded.Calculate,
-                    badgeColor = Color(0xFFFF9500),
-                    title = "ASHA Calculator",
-                    subtitle = "Land Bigha & Rate math",
-                    customLeading = { PremiumCalculatorIcon(size = 38.dp, active = true) },
-                    onClick = onOpenCalculator,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("quick_calculator_button")
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    V103ActionTile(
+                        icon = Icons.Rounded.ElectricBolt,
+                        badgeColor = Color(0xFFD97706),
+                        title = "Electricity Bill",
+                        subtitle = if (data.wbsedclConsumers.isNotEmpty()) {
+                            "WBSEDCL · ${data.wbsedclConsumers.size} IDs"
+                        } else {
+                            "WBSEDCL Quick Pay"
+                        },
+                        onClick = onOpenWbsedcl,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("quick_wbsedcl_button")
+                    )
+                    V103ActionTile(
+                        icon = Icons.Rounded.Calculate,
+                        badgeColor = Color(0xFFFF9500),
+                        title = "ASHA Calculator",
+                        subtitle = "Land & Rate math",
+                        customLeading = { PremiumCalculatorIcon(size = 38.dp, active = true) },
+                        onClick = onOpenCalculator,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("quick_calculator_button")
+                    )
+                }
             }
         }
 
@@ -863,22 +918,28 @@ private fun V103KpiCard(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 1.dp
+        shadowElevation = 2.dp
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Box(
+                modifier = Modifier
+                    .width(26.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(valueColor.copy(alpha = 0.85f))
+            )
             Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
+                text = label.uppercase(),
+                style = BmwTelemetryStyle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineMedium,
+                style = BmwMetricNumberStyle,
                 color = valueColor,
-                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

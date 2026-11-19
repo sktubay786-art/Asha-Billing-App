@@ -370,3 +370,256 @@ test("Expenses: owner create, partial update, delete, shared access, and validat
   await assertSucceeds(expRef.delete());
 });
 
+test("Customer landUnit, Bill/Payment edit & undo delete, and ChatMessages CRUD", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  const custRef = aliceDb.collection(`users/${ALICE_UID}/customers`).doc("cust_edit");
+  await assertSucceeds(
+    custRef.set({
+      ...validCustomer(ALICE_UID),
+      landArea: "25",
+      landUnit: "katha",
+      landOwnerType: "Own",
+      landOwnerName: "",
+    })
+  );
+
+  // Invalid landUnit must fail
+  await assertFails(
+    custRef.update({
+      landUnit: "hectare",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  const billRef = aliceDb.collection(`users/${ALICE_UID}/bills`).doc("bill_edit");
+  await assertSucceeds(billRef.set(validBill(ALICE_UID, "cust_edit")));
+
+  // Edit mistaken bill calculation
+  await assertSucceeds(
+    billRef.update({
+      landAmount: 40,
+      unit: "decimal",
+      bigha: 1.0,
+      rate: 2400,
+      current: 2400,
+      previousDue: 500,
+      allTotal: 2900,
+      note: "Fixed bill rate",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Cannot mutate billNo on update
+  await assertFails(
+    billRef.update({
+      billNo: "ASHA-HACK",
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  const payRef = aliceDb.collection(`users/${ALICE_UID}/payments`).doc("pay_edit");
+  await assertSucceeds(payRef.set(validPayment(ALICE_UID, "bill_edit", "cust_edit")));
+
+  // Fix mistaken payment amount & mode
+  await assertSucceeds(
+    payRef.update({
+      amount: 600,
+      mode: "UPI",
+      receivedIn: "UPI",
+      note: "Corrected amount",
+      updatedAt: new Date(Date.now() - 300),
+    })
+  );
+
+  // Undo/delete mistaken payment and bill
+  await assertSucceeds(payRef.delete());
+  await assertSucceeds(billRef.delete());
+
+  // ChatMessages CRUD
+  const msgNow = new Date(Date.now() - 500);
+  const msgRef = aliceDb.collection(`users/${ALICE_UID}/chatMessages`).doc("msg_1");
+  await assertSucceeds(
+    msgRef.set({
+      userId: ALICE_UID,
+      customerId: "cust_edit",
+      text: "Called customer for Friday irrigation",
+      sender: "ME",
+      date: "2026-11-18",
+      createdAt: msgNow,
+      updatedAt: msgNow,
+    })
+  );
+  await assertSucceeds(
+    msgRef.update({
+      text: "Confirmed Saturday 9 AM payment",
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+  await assertFails(bobDb.collection(`users/${ALICE_UID}/chatMessages`).get());
+  await assertFails(unauthDb.collection(`users/${ALICE_UID}/chatMessages`).get());
+  await assertFails(
+    aliceDb.collection(`users/${ALICE_UID}/chatMessages`).doc("msg_orphan").set({
+      userId: ALICE_UID,
+      customerId: "missing_cust",
+      text: "Orphan message",
+      sender: "ME",
+      date: "2026-11-18",
+      createdAt: msgNow,
+      updatedAt: msgNow,
+    })
+  );
+  await assertSucceeds(msgRef.delete());
+});
+
+test("Shared owner workspace: chatMessages list and CRUD succeed for verified owner emails and fail for outsiders", async () => {
+  const SHARED = "asha_owner_shared";
+  const owner1Db = testEnv.authenticatedContext("D8h96O0qoaRkpd0tcnw4gszk8En2", {
+    email: "sktubay786@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const owner2Db = testEnv.authenticatedContext("uid_owner_2_chat", {
+    email: "gamingtubay@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const outsiderDb = testEnv.authenticatedContext("uid_outsider_chat", {
+    email: "outsider@gmail.com",
+    email_verified: true,
+  }).firestore();
+
+  // Exact failing production query: list users/asha_owner_shared/chatMessages
+  await assertSucceeds(owner1Db.collection(`users/${SHARED}/chatMessages`).get());
+  await assertSucceeds(owner2Db.collection(`users/${SHARED}/chatMessages`).get());
+  await assertFails(outsiderDb.collection(`users/${SHARED}/chatMessages`).get());
+
+  // Seed customer and test shared chat message CRUD
+  await assertSucceeds(
+    owner1Db.collection(`users/${SHARED}/customers`).doc("cust_shared_chat").set(validCustomer(SHARED))
+  );
+  const msgNow = new Date(Date.now() - 500);
+  const sharedMsgRef = owner1Db.collection(`users/${SHARED}/chatMessages`).doc("msg_shared_1");
+  await assertSucceeds(
+    sharedMsgRef.set({
+      userId: SHARED,
+      customerId: "cust_shared_chat",
+      text: "Payment reminder sent",
+      sender: "ME",
+      date: "2026-11-19",
+      createdAt: msgNow,
+      updatedAt: msgNow,
+    })
+  );
+  await assertSucceeds(owner2Db.collection(`users/${SHARED}/chatMessages`).get());
+  await assertSucceeds(
+    owner2Db.collection(`users/${SHARED}/chatMessages`).doc("msg_shared_1").update({
+      text: "Payment received in cash",
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+  await assertFails(
+    outsiderDb.collection(`users/${SHARED}/chatMessages`).doc("msg_shared_1").delete()
+  );
+  await assertSucceeds(sharedMsgRef.delete());
+});
+
+test("WBSEDCL Consumers and Payments: CRUD, shared owner access, validation, and isolation", async () => {
+  const SHARED = "asha_owner_shared";
+  const owner1Db = testEnv.authenticatedContext("uid_wb_1", {
+    email: "sktubay786@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const owner2Db = testEnv.authenticatedContext("uid_wb_2", {
+    email: "gamingtubay@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const outsiderDb = testEnv.authenticatedContext("uid_wb_outsider", {
+    email: "outsider@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  const now = new Date(Date.now() - 1000);
+  const consumerRef = owner1Db.collection(`users/${SHARED}/wbsedclConsumers`).doc("cons_1");
+  await assertSucceeds(
+    consumerRef.set({
+      userId: SHARED,
+      consumerNo: "312045678",
+      label: "Shallow 1",
+      installationNote: "East field pump",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Second owner reads & updates consumer
+  await assertSucceeds(owner2Db.collection(`users/${SHARED}/wbsedclConsumers`).get());
+  await assertSucceeds(
+    owner2Db.collection(`users/${SHARED}/wbsedclConsumers`).doc("cons_1").update({
+      label: "Main Pump 1",
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  // Outsider & unauth denied
+  await assertFails(outsiderDb.collection(`users/${SHARED}/wbsedclConsumers`).get());
+  await assertFails(unauthDb.collection(`users/${SHARED}/wbsedclConsumers`).get());
+
+  // Invalid consumerNo too short fails
+  await assertFails(
+    owner1Db.collection(`users/${SHARED}/wbsedclConsumers`).doc("cons_bad").set({
+      userId: SHARED,
+      consumerNo: "12",
+      label: "Bad",
+      installationNote: "",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Valid WBSEDCL bill payment create, read, update, delete
+  const payRef = owner1Db.collection(`users/${SHARED}/wbsedclPayments`).doc("wb_pay_1");
+  await assertSucceeds(
+    payRef.set({
+      userId: SHARED,
+      consumerNo: "312045678",
+      consumerLabel: "Main Pump 1",
+      billMonth: "Nov 2026",
+      amount: 1450.5,
+      date: "2026-11-19",
+      note: "Paid via WBSEDCL Quick Pay",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(owner2Db.collection(`users/${SHARED}/wbsedclPayments`).get());
+  await assertSucceeds(
+    owner2Db.collection(`users/${SHARED}/wbsedclPayments`).doc("wb_pay_1").update({
+      amount: 1500,
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+
+  // Zero amount and outsider denied
+  await assertFails(
+    owner1Db.collection(`users/${SHARED}/wbsedclPayments`).doc("wb_pay_bad").set({
+      userId: SHARED,
+      consumerNo: "312045678",
+      consumerLabel: "Main Pump 1",
+      billMonth: "Nov 2026",
+      amount: 0,
+      date: "2026-11-19",
+      note: "",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertFails(outsiderDb.collection(`users/${SHARED}/wbsedclPayments`).get());
+  await assertSucceeds(payRef.delete());
+  await assertSucceeds(consumerRef.delete());
+});
+
+
+
+

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,25 +31,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Handshake
-import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Landscape
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,12 +71,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.Bill
 import com.example.data.model.BillingDashboardData
+import com.example.data.model.ChatMessage
 import com.example.data.model.Customer
 import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
@@ -77,6 +87,8 @@ import com.example.data.model.formatInr
 import com.example.data.model.todayIsoDate
 import com.example.ui.components.CustomerQrPassDialog
 import com.example.ui.components.IosSquircleIcon
+import com.example.ui.components.IosWhatsAppBillIcon
+import com.example.ui.components.PrintSizePickerDialog
 import com.example.ui.components.QuickReceivePaymentDialog
 import com.example.ui.components.StatusBadge
 import com.example.ui.theme.CrimsonDue
@@ -93,15 +105,24 @@ import kotlin.math.max
 private sealed interface ChatLedgerItem {
     val sortDate: String
     val sortOrder: Int
+    val itemKey: String
 
     data class BillEntry(val bill: Bill) : ChatLedgerItem {
         override val sortDate: String get() = bill.date
         override val sortOrder: Int get() = 0
+        override val itemKey: String get() = "bill_${bill.id}"
     }
 
     data class PaymentEntry(val payment: Payment, val billNo: String) : ChatLedgerItem {
         override val sortDate: String get() = payment.date
         override val sortOrder: Int get() = 1
+        override val itemKey: String get() = "pay_${payment.id}"
+    }
+
+    data class NoteEntry(val message: ChatMessage) : ChatLedgerItem {
+        override val sortDate: String get() = message.date
+        override val sortOrder: Int get() = 2
+        override val itemKey: String get() = "msg_${message.id}"
     }
 }
 
@@ -110,9 +131,10 @@ fun UserChatLedgerScreen(
     customer: Customer,
     data: BillingDashboardData,
     defaultBillDesign: BillDesignModel = BillDesignModel.PREMIUM_GREEN,
-    defaultPrintSize: BillPrintSize = BillPrintSize.THERMAL_80,
+    defaultPrintSize: BillPrintSize = BillPrintSize.A4_QUARTER,
     qrMode: String = "Dynamic amount QR",
     customQrPath: String = "",
+    bengaliLabels: Boolean = false,
     onBack: () -> Unit,
     onNewBill: () -> Unit,
     onRecordBillPayment: (
@@ -130,6 +152,13 @@ fun UserChatLedgerScreen(
     onSettleCustomer: () -> Unit,
     onDeleteCustomer: () -> Unit,
     onViewInvoice: (String) -> Unit,
+    onEditBill: ((Bill) -> Unit)? = null,
+    onDeleteBill: ((Bill) -> Unit)? = null,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null,
+    onSendChatMessage: (text: String, onSent: () -> Unit) -> Unit = { _, _ -> },
+    onUpdateChatMessage: (message: ChatMessage, newText: String, onDone: () -> Unit) -> Unit = { _, _, _ -> },
+    onDeleteChatMessage: (messageId: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
@@ -139,16 +168,25 @@ fun UserChatLedgerScreen(
     val chatWallpaper = if (isDark) Color(0xFF0B141A) else Color(0xFFEFEAE2)
     val incomingBubbleBg = if (isDark) Color(0xFF1F2C34) else Color.White
     val outgoingBubbleBg = if (isDark) Color(0xFF005C4B) else Color(0xFFD9FDD3)
+    val ownerNoteBubbleBg = if (isDark) Color(0xFF163A32) else Color(0xFFE6F4EA)
     val headerBg = if (isDark) Color(0xFF1F2C34) else EmeraldDeep
 
     var menuExpanded by remember { mutableStateOf(false) }
     var showQuickReceiveDialog by remember { mutableStateOf(false) }
-    var showCustomerQrDialog by remember { mutableStateOf(false) }
+    var showCustomerBarcodeDialog by remember { mutableStateOf(false) }
+    var pendingPrintBill by remember { mutableStateOf<Bill?>(null) }
+    var composerText by remember { mutableStateOf("") }
+    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var editingMessageText by remember { mutableStateOf("") }
+    var pendingDeleteMessage by remember { mutableStateOf<ChatMessage?>(null) }
 
     val customerDue = data.dueForCustomer(customer.id)
     val customerBills = remember(data.bills, customer.id) { data.billsForCustomer(customer.id) }
     val customerPayments = remember(data.payments, customer.id) {
         data.payments.filter { it.customerId == customer.id }
+    }
+    val customerMessages = remember(data.chatMessages, customer.id) {
+        data.chatMessagesForCustomer(customer.id)
     }
     val totalBilled = remember(customerBills, customer.openingDue) {
         customerBills.sumOf { it.current } + customer.openingDue
@@ -188,7 +226,8 @@ fun UserChatLedgerScreen(
             design = defaultBillDesign,
             size = defaultPrintSize,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliLabels
         )
     }
 
@@ -217,7 +256,7 @@ fun UserChatLedgerScreen(
         }
     }
 
-    val timelineItems = remember(data.bills, data.payments, customer.id) {
+    val timelineItems = remember(data.bills, data.payments, customerMessages, customer.id) {
         val bills = data.bills
             .filter { it.customerId == customer.id }
             .map { ChatLedgerItem.BillEntry(it) }
@@ -227,7 +266,8 @@ fun UserChatLedgerScreen(
                 val billNo = billMap[p.billId]?.billNo ?: "Ledger"
                 ChatLedgerItem.PaymentEntry(p, billNo)
             }
-        (bills + payments).sortedWith(
+        val notes = customerMessages.map { ChatLedgerItem.NoteEntry(it) }
+        (bills + payments + notes).sortedWith(
             compareBy<ChatLedgerItem> { it.sortDate }.thenBy { it.sortOrder }
         )
     }
@@ -236,8 +276,9 @@ fun UserChatLedgerScreen(
         modifier = modifier
             .fillMaxSize()
             .background(chatWallpaper)
+            .imePadding()
     ) {
-        // WhatsApp-style Header (Back, Avatar, Name/Village, Call, Customer QR, More Menu)
+        // WhatsApp-style Header (Back, Avatar, Name/Village, Direct Dial Call, Barcode ID, More Menu)
         Surface(
             color = headerBg,
             shadowElevation = 4.dp
@@ -314,18 +355,18 @@ fun UserChatLedgerScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Call,
-                            contentDescription = "Call customer",
+                            contentDescription = "Dial customer phone",
                             tint = Color.White
                         )
                     }
 
                     IconButton(
-                        onClick = { showCustomerQrDialog = true },
+                        onClick = { showCustomerBarcodeDialog = true },
                         modifier = Modifier.testTag("chat_qr_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.QrCode2,
-                            contentDescription = "Customer QR Pass",
+                            imageVector = Icons.Rounded.QrCodeScanner,
+                            contentDescription = "Customer Barcode ID",
                             tint = Color.White
                         )
                     }
@@ -354,11 +395,11 @@ fun UserChatLedgerScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Customer QR Pass") },
-                                leadingIcon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
+                                text = { Text("Customer Barcode ID") },
+                                leadingIcon = { Icon(Icons.Rounded.QrCodeScanner, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
-                                    showCustomerQrDialog = true
+                                    showCustomerBarcodeDialog = true
                                 }
                             )
                             DropdownMenuItem(
@@ -462,7 +503,7 @@ fun UserChatLedgerScreen(
             }
         }
 
-        // Chat Ledger Stream
+        // Chat Ledger Stream (Bills, Payments, and Owner Manual Chat Notes — all with Edit/Undo)
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -502,23 +543,27 @@ fun UserChatLedgerScreen(
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             Text(
-                                text = "No bills or payments yet",
+                                text = "No bills, payments, or notes yet.\nCreate a bill or type a note below.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
                     }
                 }
             } else {
-                items(timelineItems) { item ->
+                items(timelineItems, key = { it.itemKey }) { item ->
                     when (item) {
                         is ChatLedgerItem.BillEntry -> {
                             BillChatBubble(
                                 bill = item.bill,
                                 data = data,
                                 bubbleColor = incomingBubbleBg,
-                                onClick = { onViewInvoice(item.bill.id) }
+                                onClick = { onViewInvoice(item.bill.id) },
+                                onPrintClick = { pendingPrintBill = item.bill },
+                                onEditBill = onEditBill,
+                                onDeleteBill = onDeleteBill
                             )
                         }
                         is ChatLedgerItem.PaymentEntry -> {
@@ -526,7 +571,21 @@ fun UserChatLedgerScreen(
                                 payment = item.payment,
                                 billNo = item.billNo,
                                 bubbleColor = outgoingBubbleBg,
-                                isDark = isDark
+                                isDark = isDark,
+                                onEditPayment = onEditPayment,
+                                onDeletePayment = onDeletePayment
+                            )
+                        }
+                        is ChatLedgerItem.NoteEntry -> {
+                            OwnerNoteChatBubble(
+                                message = item.message,
+                                bubbleColor = ownerNoteBubbleBg,
+                                isDark = isDark,
+                                onEdit = {
+                                    editingMessage = item.message
+                                    editingMessageText = item.message.text
+                                },
+                                onDelete = { pendingDeleteMessage = item.message }
                             )
                         }
                     }
@@ -534,55 +593,107 @@ fun UserChatLedgerScreen(
             }
         }
 
-        // WhatsApp-style Ergonomic 4-Button Bottom Action Dock (Bill, Receive, WA Bill Img, Remind)
+        // Bottom Dock: Manual Owner Chat Composer + 4-Button Per-User Action Bar
         Surface(
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
             shadowElevation = 10.dp
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ChatBottomActionTile(
-                    icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                    label = "Bill",
-                    badgeColor = Color(0xFF0B6B50),
-                    tag = "chat_new_bill_button",
-                    onClick = onNewBill,
-                    modifier = Modifier.weight(1f)
-                )
-                ChatBottomActionTile(
-                    icon = Icons.Rounded.CurrencyRupee,
-                    label = "Receive",
-                    badgeColor = Color(0xFF16A34A),
-                    tag = "chat_receive_pay_button",
-                    onClick = { openQuickReceive() },
-                    modifier = Modifier.weight(1f)
-                )
-                ChatBottomActionTile(
-                    icon = Icons.Rounded.Image,
-                    label = "WA Bill",
-                    badgeColor = Color(0xFF25D366),
-                    tag = "chat_wa_bill_button",
-                    onClick = { sendWhatsAppBillImage() },
-                    modifier = Modifier.weight(1f)
-                )
-                ChatBottomActionTile(
-                    icon = Icons.Rounded.NotificationsActive,
-                    label = "Remind",
-                    badgeColor = Color(0xFFF59E0B),
-                    tag = "chat_remind_button",
-                    onClick = {
-                        val msg = InvoicePrinter.buildReminderText(customer, customerDue)
-                        InvoicePrinter.openWhatsAppOrShare(context, customer.phone, msg)
-                    },
-                    modifier = Modifier.weight(1f)
-                )
+                // Manual Owner Chat Note Composer
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = composerText,
+                        onValueChange = { composerText = it },
+                        placeholder = { Text("Add a private note or chat message…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(24.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("chat_manual_message_input")
+                    )
+                    Surface(
+                        onClick = {
+                            val clean = composerText.trim()
+                            if (clean.isNotEmpty()) {
+                                onSendChatMessage(clean) {
+                                    composerText = ""
+                                }
+                            }
+                        },
+                        enabled = composerText.isNotBlank(),
+                        shape = CircleShape,
+                        color = if (composerText.isNotBlank()) EmeraldPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("chat_send_message_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = "Send note",
+                                tint = if (composerText.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Ergonomic 4-Button Action Bar (Bill, Receive, WhatsApp Bill w/ iOS icon, Remind)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ChatBottomActionTile(
+                        icon = Icons.AutoMirrored.Rounded.ReceiptLong,
+                        label = "Bill",
+                        badgeColor = Color(0xFF0B6B50),
+                        tag = "chat_new_bill_button",
+                        onClick = onNewBill,
+                        modifier = Modifier.weight(0.92f)
+                    )
+                    ChatBottomActionTile(
+                        icon = Icons.Rounded.CurrencyRupee,
+                        label = "Receive",
+                        badgeColor = Color(0xFF16A34A),
+                        tag = "chat_receive_pay_button",
+                        onClick = { openQuickReceive() },
+                        modifier = Modifier.weight(0.95f)
+                    )
+                    ChatBottomActionTileCustom(
+                        label = "WhatsApp Bill",
+                        tag = "chat_wa_bill_button",
+                        onClick = { sendWhatsAppBillImage() },
+                        iconContent = { IosWhatsAppBillIcon(size = 28.dp) },
+                        modifier = Modifier.weight(1.22f)
+                    )
+                    ChatBottomActionTile(
+                        icon = Icons.Rounded.NotificationsActive,
+                        label = "Remind",
+                        badgeColor = Color(0xFFF59E0B),
+                        tag = "chat_remind_button",
+                        onClick = {
+                            val msg = InvoicePrinter.buildReminderText(customer, customerDue)
+                            InvoicePrinter.openWhatsAppOrShare(context, customer.phone, msg)
+                        },
+                        modifier = Modifier.weight(0.92f)
+                    )
+                }
             }
         }
     }
@@ -597,10 +708,95 @@ fun UserChatLedgerScreen(
         )
     }
 
-    if (showCustomerQrDialog) {
+    if (showCustomerBarcodeDialog) {
         CustomerQrPassDialog(
             customer = customer,
-            onDismiss = { showCustomerQrDialog = false }
+            onDismiss = { showCustomerBarcodeDialog = false }
+        )
+    }
+
+    pendingPrintBill?.let { billToPrint ->
+        PrintSizePickerDialog(
+            initialSize = defaultPrintSize,
+            onSizeSelected = { chosenSize ->
+                pendingPrintBill = null
+                InvoicePrinter.printInvoice(
+                    context = context,
+                    settings = data.settings,
+                    bill = billToPrint,
+                    payments = data.paymentsForBill(billToPrint.id),
+                    paid = data.paidForBill(billToPrint.id),
+                    due = data.dueForBill(billToPrint),
+                    design = defaultBillDesign,
+                    printSize = chosenSize,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliLabels
+                )
+            },
+            onDismiss = { pendingPrintBill = null }
+        )
+    }
+
+    editingMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { editingMessage = null },
+            title = { Text("Edit Chat Note") },
+            text = {
+                OutlinedTextField(
+                    value = editingMessageText,
+                    onValueChange = { editingMessageText = it },
+                    label = { Text("Note") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_chat_note_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val updated = editingMessageText.trim()
+                        if (updated.isNotEmpty()) {
+                            onUpdateChatMessage(msg, updated) {
+                                editingMessage = null
+                            }
+                        }
+                    },
+                    enabled = editingMessageText.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMessage = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    pendingDeleteMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteMessage = null },
+            title = { Text("Delete Chat Note?") },
+            text = { Text("Remove \"${msg.text.take(80)}\" from ${customer.name}'s chat history?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteChatMessage(msg.id)
+                        pendingDeleteMessage = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CrimsonDue)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteMessage = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 }
@@ -637,20 +833,11 @@ private fun ChatBottomActionTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    ChatBottomActionTileCustom(
+        label = label,
+        tag = tag,
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
-        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier
-            .height(60.dp)
-            .testTag(tag)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
+        iconContent = {
             IosSquircleIcon(
                 icon = icon,
                 contentDescription = label,
@@ -658,14 +845,43 @@ private fun ChatBottomActionTile(
                 size = 28.dp,
                 iconSize = 15.dp
             )
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun ChatBottomActionTileCustom(
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+    iconContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .height(62.dp)
+            .testTag(tag)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            iconContent()
             Spacer(modifier = Modifier.height(3.dp))
             Text(
                 text = label,
-                fontSize = 10.5.sp,
-                lineHeight = 12.sp,
+                fontSize = 9.5.sp,
+                lineHeight = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -677,10 +893,14 @@ private fun BillChatBubble(
     bill: Bill,
     data: BillingDashboardData,
     bubbleColor: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onPrintClick: () -> Unit,
+    onEditBill: ((Bill) -> Unit)? = null,
+    onDeleteBill: ((Bill) -> Unit)? = null
 ) {
     val due = data.dueForBill(bill)
     val status = data.statusForBill(bill)
+    var menuExpanded by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier.fillMaxWidth(),
@@ -688,7 +908,7 @@ private fun BillChatBubble(
     ) {
         Surface(
             modifier = Modifier
-                .widthIn(max = 310.dp)
+                .widthIn(max = 315.dp)
                 .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp))
                 .clickable(onClick = onClick),
             shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
@@ -708,9 +928,65 @@ private fun BillChatBubble(
                         text = bill.billNo,
                         style = MaterialTheme.typography.labelLarge,
                         color = EmeraldPrimary,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.weight(1f)
                     )
-                    StatusBadge(status = status)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        StatusBadge(status = status)
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .testTag("chat_bill_menu_${bill.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = "Bill actions",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Print Bill") },
+                                    leadingIcon = { Icon(Icons.Rounded.Print, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onPrintClick()
+                                    }
+                                )
+                                if (onEditBill != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Edit / Fix Bill") },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onEditBill(bill)
+                                        }
+                                    )
+                                }
+                                if (onDeleteBill != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Undo / Delete Bill", color = CrimsonDue) },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CrimsonDue)
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onDeleteBill(bill)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Text(
@@ -765,17 +1041,20 @@ private fun PaymentChatBubble(
     payment: Payment,
     billNo: String,
     bubbleColor: Color,
-    isDark: Boolean
+    isDark: Boolean,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null
 ) {
     val textColor = if (isDark) Color.White else Color(0xFF111B21)
     val subColor = if (isDark) Color(0xFFB3D5CC) else Color(0xFF4B6358)
+    var menuExpanded by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.CenterEnd
     ) {
         Surface(
-            modifier = Modifier.widthIn(max = 290.dp),
+            modifier = Modifier.widthIn(max = 300.dp),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
             color = bubbleColor,
             shadowElevation = 1.dp
@@ -785,25 +1064,76 @@ private fun PaymentChatBubble(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "+ ${formatInr(payment.amount)}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = textColor,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color.Black.copy(alpha = 0.08f)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = payment.mode,
-                            style = MaterialTheme.typography.labelSmall,
+                            text = "+ ${formatInr(payment.amount)}",
+                            style = MaterialTheme.typography.titleMedium,
                             color = textColor,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            fontWeight = FontWeight.ExtraBold
                         )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Black.copy(alpha = 0.08f)
+                        ) {
+                            Text(
+                                text = payment.mode,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    if (onEditPayment != null || onDeletePayment != null) {
+                        Box {
+                            IconButton(
+                                onClick = { menuExpanded = true },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .testTag("chat_payment_menu_${payment.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = "Payment options",
+                                    tint = subColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                if (onEditPayment != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Edit / Fix Payment") },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onEditPayment(payment)
+                                        }
+                                    )
+                                }
+                                if (onDeletePayment != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Undo / Delete Payment", color = CrimsonDue) },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CrimsonDue)
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onDeletePayment(payment)
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -836,6 +1166,105 @@ private fun PaymentChatBubble(
                         contentDescription = null,
                         tint = if (isDark) Color(0xFF53BDEB) else Color(0xFF007B68),
                         modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnerNoteChatBubble(
+    message: ChatMessage,
+    bubbleColor: Color,
+    isDark: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val textColor = if (isDark) Color.White else Color(0xFF111B21)
+    val subColor = if (isDark) Color(0xFFA7C7BE) else Color(0xFF4B6358)
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Surface(
+            modifier = Modifier.widthIn(max = 290.dp),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
+            color = bubbleColor,
+            border = BorderStroke(0.75.dp, EmeraldPrimary.copy(alpha = 0.25f)),
+            shadowElevation = 1.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = message.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = textColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier
+                                .size(26.dp)
+                                .testTag("chat_note_menu_${message.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "Note options",
+                                tint = subColor,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Edit Note") },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEdit()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete Note", color = CrimsonDue) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CrimsonDue)
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    onDelete()
+                                }
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.align(Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Owner Note · ${message.date}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = subColor
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.DoneAll,
+                        contentDescription = null,
+                        tint = EmeraldPrimary,
+                        modifier = Modifier.size(13.dp)
                     )
                 }
             }

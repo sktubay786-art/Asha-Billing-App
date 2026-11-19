@@ -100,6 +100,24 @@ val AshaTypography = Typography(
         fontWeight = FontWeight.SemiBold,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.1.sp
+        letterSpacing = 0.45.sp
     )
 )
+
+// Precision German-automotive inspired telemetry & display styles
+val BmwTelemetryStyle = TextStyle(
+    fontFamily = IosSansFamily,
+    fontWeight = FontWeight.ExtraBold,
+    fontSize = 10.sp,
+    lineHeight = 13.sp,
+    letterSpacing = 1.35.sp
+)
+
+val BmwMetricNumberStyle = TextStyle(
+    fontFamily = IosSansFamily,
+    fontWeight = FontWeight.ExtraBold,
+    fontSize = 24.sp,
+    lineHeight = 28.sp,
+    letterSpacing = (-0.65).sp
+)
+

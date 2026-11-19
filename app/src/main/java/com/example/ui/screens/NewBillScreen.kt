@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -89,6 +90,7 @@ import com.example.data.model.LandUnit
 import com.example.data.model.PaymentMode
 import com.example.data.model.calculateBigha
 import com.example.data.model.formatInr
+import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.example.notifications.BillDueReminder
 import com.example.notifications.DueReminderScheduler
@@ -96,7 +98,10 @@ import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BarcodeScannerDialog
 import com.example.ui.components.IosSquircleIcon
+import com.example.ui.components.IosWhatsAppBillIcon
+import com.example.ui.components.PrintSizePickerDialog
 import com.example.ui.theme.CrimsonDue
+import com.example.ui.theme.EmeraldPrimary
 import com.example.util.BillDesignModel
 import com.example.util.BillDocumentEngine
 import com.example.util.BillPrintSize
@@ -112,11 +117,14 @@ private val SEASON_OPTIONS = listOf("খরা", "আমন", "বোরো", "�
 @Composable
 fun NewBillScreen(
     data: BillingDashboardData,
+    nextBillNo: String = "",
     preselectedCustomerId: String?,
     defaultBillDesign: String,
     defaultPrintSize: String,
     qrMode: String = "Dynamic amount QR",
     customQrPath: String = "",
+    defaultBengaliMode: Boolean = false,
+    onToggleBengaliMode: (Boolean) -> Unit = {},
     onConsumePreselectedCustomer: () -> Unit,
     onPreviewBill: (Bill, BillDesignModel, BillPrintSize) -> Unit,
     onSaveExistingCustomerBill: (
@@ -196,6 +204,8 @@ fun NewBillScreen(
     var selectedSize by remember(defaultPrintSize) {
         mutableStateOf(BillPrintSize.fromLabel(defaultPrintSize))
     }
+    var bengaliMode by remember(defaultBengaliMode) { mutableStateOf(defaultBengaliMode) }
+    var showPrintSizeDialog by remember { mutableStateOf(false) }
     var showBarcodeScanner by remember { mutableStateOf(false) }
 
     val notificationPermLauncher = rememberLauncherForActivityResult(
@@ -229,19 +239,23 @@ fun NewBillScreen(
 
     val landQty = if (onlyPreviousDue) 0.0 else (landAmountText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0)
     val rate = if (onlyPreviousDue) 0.0 else (rateText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0)
-    val initialPaid = initialPaidText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val initialPaid = roundMoney(initialPaidText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0)
     val bigha = if (onlyPreviousDue) 0.0 else calculateBigha(landQty, selectedUnit)
-    val currentBill = if (onlyPreviousDue) 0.0 else bigha * rate
+    val currentBill = if (onlyPreviousDue) 0.0 else roundMoney(bigha * rate)
 
-    val previousDue = if (isPrevDueEditable) {
-        manualPreviousDueText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-    } else {
-        autoCustomerDue
-    }
-    val grandTotal = currentBill + previousDue
-    val remainingAfterPay = max(0.0, grandTotal - initialPaid)
+    val previousDue = roundMoney(
+        if (isPrevDueEditable) {
+            manualPreviousDueText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+        } else {
+            autoCustomerDue
+        }
+    )
+    val grandTotal = roundMoney(currentBill + previousDue)
+    val remainingAfterPay = roundMoney(max(0.0, grandTotal - initialPaid))
+    val effectiveBillNo = nextBillNo.ifBlank { "ASHA-${LocalDate.now().year}-0001" }
 
     val draftBill = remember(
+        effectiveBillNo,
         selectedCustomer,
         manualName,
         manualPhone,
@@ -266,7 +280,7 @@ fun NewBillScreen(
         }
         Bill(
             id = "preview",
-            billNo = "PREVIEW",
+            billNo = effectiveBillNo,
             date = billDate,
             customerId = selectedCustomer?.id ?: "preview",
             customerName = selectedCustomer?.name ?: manualName.ifBlank { "Preview Customer" },
@@ -293,7 +307,8 @@ fun NewBillScreen(
         selectedDesign,
         selectedSize,
         qrMode,
-        customQrPath
+        customQrPath,
+        bengaliMode
     ) {
         BillDocumentEngine.renderBillBitmap(
             settings = data.settings,
@@ -304,7 +319,8 @@ fun NewBillScreen(
             design = selectedDesign,
             size = selectedSize,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliMode
         )
     }
 
@@ -324,7 +340,8 @@ fun NewBillScreen(
                         design = selectedDesign,
                         size = selectedSize,
                         qrMode = qrMode,
-                        customQrPath = customQrPath
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliMode
                     )
                 }
             }.onSuccess {
@@ -379,12 +396,21 @@ fun NewBillScreen(
         val numericArea = Regex("^\\d+(?:\\.\\d+)?").find(customer.landArea.trim())?.value
         if (!numericArea.isNullOrBlank() && (landAmountText == "0" || landAmountText.isBlank())) {
             landAmountText = numericArea
+            selectedUnit = LandUnit.fromKey(customer.landUnit)
         }
     }
 
     fun applyScannedCode(rawCode: String) {
         val raw = rawCode.trim()
         if (raw.isEmpty()) return
+
+        // 0. Direct exact match against Customer ID (compact 1D Code 128 Barcode on bills & passes)
+        val exactIdMatch = data.customers.firstOrNull { it.id.equals(raw, ignoreCase = false) }
+        if (exactIdMatch != null) {
+            selectCustomerAndPrefill(exactIdMatch)
+            Toast.makeText(context, "Customer loaded: ${exactIdMatch.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         fun matchPhoneDigits(input: String): String {
             val digits = input.filter { it.isDigit() }
@@ -408,7 +434,7 @@ fun NewBillScreen(
                 selectCustomerAndPrefill(cust)
                 Toast.makeText(context, "Customer loaded: ${cust.name}", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Customer QR not found ($custId)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Customer ID not found ($custId)", Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -581,11 +607,19 @@ fun NewBillScreen(
                             size = 36.dp,
                             iconSize = 19.dp
                         )
-                        Text(
-                            text = "New Bill",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Column {
+                            Text(
+                                text = "New Bill",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "$effectiveBillNo · $billDate",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     Surface(
@@ -604,12 +638,12 @@ fun NewBillScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.QrCodeScanner,
-                                contentDescription = "Scan Customer or Product QR/Barcode",
+                                contentDescription = "Scan Customer Barcode or QR",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Scan QR",
+                                text = "Scan ID",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
@@ -1301,11 +1335,51 @@ fun NewBillScreen(
         // Bill Design Models & Live Preview Card
         item {
             AshaPanelCard {
-                Text(
-                    text = "Bill Pass & Sheet Preview",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Bill Pass & Sheet Preview",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (bengaliMode) "বাংলা বিল মোড চালু আছে" else "English bill labels",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    FilterChip(
+                        selected = bengaliMode,
+                        onClick = {
+                            val next = !bengaliMode
+                            bengaliMode = next
+                            onToggleBengaliMode(next)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Translate,
+                                contentDescription = "Toggle Bengali bill labels",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = if (bengaliMode) "বাংলা ✓" else "বাংলা",
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = EmeraldPrimary,
+                            selectedLabelColor = Color.White,
+                            selectedLeadingIconColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("new_bill_bengali_toggle")
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1394,26 +1468,11 @@ fun NewBillScreen(
                         iconColor = MaterialTheme.colorScheme.primary,
                         cardColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                         tag = "new_bill_print_icon",
-                        onClick = {
-                            InvoicePrinter.printInvoice(
-                                context = context,
-                                settings = data.settings,
-                                bill = draftBill,
-                                payments = emptyList(),
-                                paid = initialPaid,
-                                due = remainingAfterPay,
-                                design = selectedDesign,
-                                printSize = selectedSize,
-                                qrMode = qrMode,
-                                customQrPath = customQrPath
-                            )
-                        },
-                        modifier = Modifier.weight(1f)
+                        onClick = { showPrintSizeDialog = true },
+                        modifier = Modifier.weight(0.95f)
                     )
-                    NewBillActionIconTile(
-                        icon = Icons.Rounded.Image,
-                        label = "WA Bill",
-                        iconColor = Color(0xFF25D366),
+                    NewBillActionIconTileCustom(
+                        label = "WhatsApp Bill",
                         cardColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                         tag = "new_bill_image_reminder_icon",
                         onClick = {
@@ -1427,10 +1486,12 @@ fun NewBillScreen(
                                 design = selectedDesign,
                                 size = selectedSize,
                                 qrMode = qrMode,
-                                customQrPath = customQrPath
+                                customQrPath = customQrPath,
+                                bengaliLabels = bengaliMode
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        iconContent = { IosWhatsAppBillIcon(size = 30.dp) },
+                        modifier = Modifier.weight(1.25f)
                     )
                     NewBillActionIconTile(
                         icon = Icons.Rounded.PictureAsPdf,
@@ -1442,7 +1503,7 @@ fun NewBillScreen(
                             val cleanName = draftBill.customerName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
                             pdfSaverLauncher.launch("ASHA_${cleanName}_${draftBill.date}.pdf")
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(0.85f)
                     )
                     NewBillActionIconTile(
                         icon = Icons.Rounded.NotificationsActive,
@@ -1458,7 +1519,7 @@ fun NewBillScreen(
                             )
                             InvoicePrinter.openWhatsAppOrShare(context, draftBill.phone, msg)
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(0.95f)
                     )
                 }
             }
@@ -1478,6 +1539,30 @@ fun NewBillScreen(
             initialDateIso = dueDateIso,
             onDateSelected = { dueDateIso = it },
             onDismiss = { showDueDatePicker = false }
+        )
+    }
+
+    if (showPrintSizeDialog) {
+        PrintSizePickerDialog(
+            initialSize = selectedSize,
+            onSizeSelected = { chosenSize ->
+                selectedSize = chosenSize
+                showPrintSizeDialog = false
+                InvoicePrinter.printInvoice(
+                    context = context,
+                    settings = data.settings,
+                    bill = draftBill,
+                    payments = emptyList(),
+                    paid = initialPaid,
+                    due = remainingAfterPay,
+                    design = selectedDesign,
+                    printSize = chosenSize,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliMode
+                )
+            },
+            onDismiss = { showPrintSizeDialog = false }
         )
     }
 
@@ -1502,19 +1587,12 @@ private fun NewBillActionIconTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    NewBillActionIconTileCustom(
+        label = label,
+        cardColor = cardColor,
+        tag = tag,
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = cardColor,
-        modifier = modifier
-            .height(66.dp)
-            .testTag(tag)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
+        iconContent = {
             IosSquircleIcon(
                 icon = icon,
                 contentDescription = label,
@@ -1522,13 +1600,42 @@ private fun NewBillActionIconTile(
                 size = 30.dp,
                 iconSize = 16.dp
             )
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun NewBillActionIconTileCustom(
+    label: String,
+    cardColor: Color,
+    tag: String,
+    onClick: () -> Unit,
+    iconContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = cardColor,
+        modifier = modifier
+            .height(70.dp)
+            .testTag(tag)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            iconContent()
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = label,
-                fontSize = 10.5.sp,
+                fontSize = 9.5.sp,
+                lineHeight = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }

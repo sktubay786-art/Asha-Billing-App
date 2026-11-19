@@ -10,11 +10,6 @@ object OwnerAccessControl {
         "gamingtubay@gmail.com"
     )
 
-    val ALLOWED_OWNER_PHONES: Set<String> = setOf(
-        "8710065540",
-        "9564061920"
-    )
-
     fun normalizeEmail(raw: String?): String =
         raw?.trim()?.lowercase().orEmpty()
 
@@ -28,14 +23,9 @@ object OwnerAccessControl {
         return normalized.isNotEmpty() && normalized in ALLOWED_OWNER_EMAILS
     }
 
-    fun isAllowedOwnerPhone(phone: String?): Boolean {
-        val normalized = normalizeIndianPhone10(phone)
-        return normalized.length == 10 && normalized in ALLOWED_OWNER_PHONES
-    }
-
     fun isAuthorizedAppEditor(user: FirebaseUser?): Boolean {
         if (user == null) return false
-        return isAllowedOwnerEmail(user.email) || isAllowedOwnerPhone(user.phoneNumber)
+        return isAllowedOwnerEmail(user.email)
     }
 
     fun workspaceIdFor(user: FirebaseUser): String {
@@ -45,7 +35,6 @@ object OwnerAccessControl {
     fun ownerIdentityLabel(user: FirebaseUser?): String {
         if (user == null) return "Not signed in"
         val email = user.email?.takeIf { it.isNotBlank() }
-        val phone = user.phoneNumber?.takeIf { it.isNotBlank() }
-        return email ?: phone ?: "Signed In"
+        return email ?: "Signed In"
     }
 }

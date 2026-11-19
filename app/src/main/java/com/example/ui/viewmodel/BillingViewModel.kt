@@ -3,17 +3,22 @@ package com.example.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.auth.OwnerAccessControl
 import com.example.data.firebase.BillingRepository
 import com.example.data.model.Bill
 import com.example.data.model.BillingDashboardData
 import com.example.data.model.BusinessSettings
+import com.example.data.model.ChatMessage
 import com.example.data.model.Customer
 import com.example.data.model.Expense
 import com.example.data.model.ExpenseCategory
 import com.example.data.model.LandUnit
 import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
+import com.example.data.model.WbsedclBillPayment
+import com.example.data.model.WbsedclConsumer
 import com.example.data.model.calculateBigha
+import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.example.util.SafeCalculator
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -50,18 +55,29 @@ class BillingViewModel(
 ) : ViewModel() {
 
     val uiState: StateFlow<UiState<BillingDashboardData>> = combine(
-        repository.observeSettings(currentUserId),
-        repository.observeCustomers(currentUserId),
-        repository.observeBills(currentUserId),
-        repository.observePayments(currentUserId),
-        repository.observeExpenses(currentUserId)
-    ) { settings, customers, bills, payments, expenses ->
-        BillingDashboardData(
-            settings = settings,
-            customers = customers,
-            bills = bills,
-            payments = payments,
-            expenses = expenses
+        combine(
+            repository.observeSettings(currentUserId),
+            repository.observeCustomers(currentUserId),
+            repository.observeBills(currentUserId),
+            repository.observePayments(currentUserId),
+            repository.observeExpenses(currentUserId)
+        ) { settings, customers, bills, payments, expenses ->
+            BillingDashboardData(
+                settings = settings,
+                customers = customers,
+                bills = bills,
+                payments = payments,
+                expenses = expenses
+            )
+        },
+        repository.observeChatMessages(currentUserId),
+        repository.observeWbsedclConsumers(currentUserId),
+        repository.observeWbsedclPayments(currentUserId)
+    ) { partial, chatMessages, wbsedclConsumers, wbsedclPayments ->
+        partial.copy(
+            chatMessages = chatMessages,
+            wbsedclConsumers = wbsedclConsumers,
+            wbsedclPayments = wbsedclPayments
         )
     }
         .map<BillingDashboardData, UiState<BillingDashboardData>> { UiState.Success(it) }
@@ -144,6 +160,40 @@ class BillingViewModel(
         }
     }
 
+    fun nextBillNumber(bills: List<Bill>): String {
+        val year = Year.now().value
+        val regex = Regex("""^ASHA-$year-(\d+)$""")
+        val maxSeq = bills
+            .mapNotNull { regex.matchEntire(it.billNo.trim())?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            .maxOrNull() ?: 0
+        return "ASHA-$year-${(maxSeq + 1).toString().padStart(4, '0')}"
+    }
+
+    fun findMatchingCustomer(
+        customers: List<Customer>,
+        name: String,
+        phone: String,
+        village: String
+    ): Customer? {
+        val phone10 = OwnerAccessControl.normalizeIndianPhone10(phone)
+        if (phone10.length == 10) {
+            customers.firstOrNull {
+                OwnerAccessControl.normalizeIndianPhone10(it.phone) == phone10
+            }?.let { return it }
+        }
+        val cleanName = name.trim().lowercase()
+        val cleanVillage = village.trim().lowercase()
+        if (cleanName.isBlank()) return null
+        val nameMatches = customers.filter { it.name.trim().lowercase() == cleanName }
+        if (nameMatches.isEmpty()) return null
+        if (cleanVillage.isNotBlank()) {
+            nameMatches.firstOrNull { it.village.trim().lowercase() == cleanVillage }?.let { return it }
+            nameMatches.firstOrNull { it.village.isBlank() }?.let { return it }
+            return null
+        }
+        return if (nameMatches.size == 1) nameMatches.first() else null
+    }
+
     fun saveCustomer(
         existingId: String = "",
         name: String,
@@ -152,31 +202,54 @@ class BillingViewModel(
         address: String,
         openingDue: Double,
         landArea: String = "",
+        landUnit: LandUnit = LandUnit.DECIMAL,
         landOwnerType: String = "Own",
         landOwnerName: String = "",
+        existingCustomers: List<Customer> = (uiState.value as? UiState.Success)?.data?.customers.orEmpty(),
         onComplete: (Boolean) -> Unit = {}
     ) {
         viewModelScope.launch {
             _cloudStatus.value = "Saving to cloud…"
             val normalizedType = if (landOwnerType.equals("Other", ignoreCase = true)) "Other" else "Own"
+            val matchedExisting = if (existingId.isBlank()) {
+                findMatchingCustomer(existingCustomers, name, phone, village)
+            } else {
+                null
+            }
+            val targetId = existingId.ifBlank { matchedExisting?.id.orEmpty() }
+            val mergedOpening = if (existingId.isBlank() && matchedExisting != null) {
+                roundMoney(matchedExisting.openingDue + openingDue.coerceAtLeast(0.0))
+            } else {
+                roundMoney(openingDue.coerceAtLeast(0.0))
+            }
+
             val result = repository.saveCustomer(
                 currentUserId,
                 Customer(
-                    id = existingId,
+                    id = targetId,
                     userId = currentUserId,
                     name = name.trim(),
-                    phone = phone.trim(),
-                    village = village.trim(),
-                    address = address.trim(),
-                    openingDue = openingDue.coerceAtLeast(0.0),
-                    landArea = landArea.trim(),
+                    phone = phone.trim().ifBlank { matchedExisting?.phone.orEmpty() },
+                    village = village.trim().ifBlank { matchedExisting?.village.orEmpty() },
+                    address = address.trim().ifBlank { matchedExisting?.address.orEmpty() },
+                    openingDue = mergedOpening,
+                    landArea = landArea.trim().ifBlank { matchedExisting?.landArea.orEmpty() },
+                    landUnit = if (landArea.isNotBlank()) landUnit.key else (matchedExisting?.landUnit ?: landUnit.key),
                     landOwnerType = normalizedType,
-                    landOwnerName = if (normalizedType == "Other") landOwnerName.trim() else ""
+                    landOwnerName = if (normalizedType == "Other") {
+                        landOwnerName.trim().ifBlank { matchedExisting?.landOwnerName.orEmpty() }
+                    } else ""
                 )
             )
             if (result.isSuccess) {
                 _cloudStatus.value = "Cloud synced"
-                _toastMessages.tryEmit("Customer saved")
+                _toastMessages.tryEmit(
+                    if (matchedExisting != null && existingId.isBlank()) {
+                        "Updated existing user: ${matchedExisting.name}"
+                    } else {
+                        "Customer saved"
+                    }
+                )
                 onComplete(true)
             } else {
                 _cloudStatus.value = "Cloud save failed"
@@ -194,11 +267,13 @@ class BillingViewModel(
             val custBills = data.bills.filter { it.customerId == customer.id }
             val billIds = custBills.map { it.id }
             val paymentIds = data.payments.filter { it.customerId == customer.id }.map { it.id }
+            val chatMessageIds = data.chatMessages.filter { it.customerId == customer.id }.map { it.id }
             val result = repository.deleteCustomerAndData(
                 userId = currentUserId,
                 customerId = customer.id,
                 billIds = billIds,
-                paymentIds = paymentIds
+                paymentIds = paymentIds,
+                chatMessageIds = chatMessageIds
             )
             if (result.isSuccess) {
                 _cloudStatus.value = "Cloud synced"
@@ -228,16 +303,16 @@ class BillingViewModel(
         onCreated: (billId: String, billNo: String) -> Unit
     ) {
         val bigha = calculateBigha(landAmount, unit)
-        val currentAmount = bigha * ratePerBigha
-        val previousDue = (previousDueOverride ?: data.dueForCustomer(customer.id)).coerceAtLeast(0.0)
-        val grandTotal = currentAmount + previousDue
+        val currentAmount = roundMoney(bigha * ratePerBigha)
+        val previousDue = roundMoney((previousDueOverride ?: data.dueForCustomer(customer.id)).coerceAtLeast(0.0))
+        val grandTotal = roundMoney(currentAmount + previousDue)
 
         if (grandTotal <= 0.0) {
             _toastMessages.tryEmit("Enter a valid land quantity, rate, or previous due")
             return
         }
 
-        val billNo = "ASHA-${Year.now().value}-${(data.bills.size + 1).toString().padStart(4, '0')}"
+        val billNo = nextBillNumber(data.bills)
         val bill = Bill(
             userId = currentUserId,
             billNo = billNo,
@@ -251,7 +326,7 @@ class BillingViewModel(
             landAmount = landAmount,
             unit = unit.key,
             bigha = bigha,
-            rate = ratePerBigha,
+            rate = roundMoney(ratePerBigha),
             current = currentAmount,
             previousDue = previousDue,
             allTotal = grandTotal,
@@ -263,13 +338,13 @@ class BillingViewModel(
             val result = repository.createBill(
                 userId = currentUserId,
                 bill = bill,
-                initialPaid = initialPaid,
+                initialPaid = roundMoney(initialPaid),
                 initialMode = initialMode,
                 initialReceivedIn = initialReceivedIn
             )
             if (result.isSuccess) {
                 _cloudStatus.value = "Cloud synced"
-                _toastMessages.tryEmit("Invoice saved successfully")
+                _toastMessages.tryEmit("Invoice saved ($billNo)")
                 val newId = result.getOrNull().orEmpty()
                 if (newId.isNotBlank()) {
                     _selectedInvoiceId.value = newId
@@ -307,52 +382,71 @@ class BillingViewModel(
             _toastMessages.tryEmit("Enter customer name or select an existing customer")
             return
         }
+        val matchedCustomer = findMatchingCustomer(data.customers, cleanName, phone, village)
         val bigha = calculateBigha(landAmount, unit)
-        val currentAmount = bigha * ratePerBigha
-        val prevDue = manualPreviousDue.coerceAtLeast(0.0)
-        val grandTotal = currentAmount + prevDue
+        val currentAmount = roundMoney(bigha * ratePerBigha)
+        val prevDue = if (matchedCustomer != null && manualPreviousDue <= 0.001) {
+            roundMoney(data.dueForCustomer(matchedCustomer.id))
+        } else {
+            roundMoney(manualPreviousDue.coerceAtLeast(0.0))
+        }
+        val grandTotal = roundMoney(currentAmount + prevDue)
         if (grandTotal <= 0.0) {
             _toastMessages.tryEmit("Enter a valid land quantity, rate, or previous due")
             return
         }
 
         viewModelScope.launch {
-            _cloudStatus.value = "Saving customer & bill…"
+            _cloudStatus.value = if (matchedCustomer != null) {
+                "Linking to ${matchedCustomer.name}…"
+            } else {
+                "Saving customer & bill…"
+            }
+
+            val resolvedPhone = phone.trim().ifBlank { matchedCustomer?.phone.orEmpty() }
+            val resolvedVillage = village.trim().ifBlank { matchedCustomer?.village.orEmpty() }
+            val resolvedAddress = address.trim().ifBlank { matchedCustomer?.address.orEmpty() }
+
             val customerResult = repository.saveCustomer(
                 userId = currentUserId,
                 customer = Customer(
+                    id = matchedCustomer?.id.orEmpty(),
                     userId = currentUserId,
-                    name = cleanName,
-                    phone = phone.trim(),
-                    village = village.trim(),
-                    address = address.trim(),
-                    openingDue = 0.0
+                    name = matchedCustomer?.name ?: cleanName,
+                    phone = resolvedPhone,
+                    village = resolvedVillage,
+                    address = resolvedAddress,
+                    openingDue = matchedCustomer?.openingDue ?: 0.0,
+                    landArea = matchedCustomer?.landArea.orEmpty(),
+                    landUnit = matchedCustomer?.landUnit ?: unit.key,
+                    landOwnerType = matchedCustomer?.landOwnerType ?: "Own",
+                    landOwnerName = matchedCustomer?.landOwnerName.orEmpty()
                 )
             )
-            val newCustomerId = customerResult.getOrNull()
-            if (customerResult.isFailure || newCustomerId.isNullOrBlank()) {
+            val resolvedCustomerId = customerResult.getOrNull()
+            if (customerResult.isFailure || resolvedCustomerId.isNullOrBlank()) {
                 _cloudStatus.value = "Cloud save failed"
                 _toastMessages.tryEmit(
-                    customerResult.exceptionOrNull()?.localizedMessage ?: "Failed to save new customer"
+                    customerResult.exceptionOrNull()?.localizedMessage ?: "Failed to save customer"
                 )
                 return@launch
             }
 
-            val billNo = "ASHA-${Year.now().value}-${(data.bills.size + 1).toString().padStart(4, '0')}"
+            val billNo = nextBillNumber(data.bills)
             val bill = Bill(
                 userId = currentUserId,
                 billNo = billNo,
                 date = date.ifBlank { todayIsoDate() },
-                customerId = newCustomerId,
-                customerName = cleanName,
-                phone = phone.trim(),
-                address = address.trim(),
-                village = village.trim(),
+                customerId = resolvedCustomerId,
+                customerName = matchedCustomer?.name ?: cleanName,
+                phone = resolvedPhone,
+                address = resolvedAddress,
+                village = resolvedVillage,
                 season = season.trim(),
                 landAmount = landAmount,
                 unit = unit.key,
                 bigha = bigha,
-                rate = ratePerBigha,
+                rate = roundMoney(ratePerBigha),
                 current = currentAmount,
                 previousDue = prevDue,
                 allTotal = grandTotal,
@@ -361,13 +455,19 @@ class BillingViewModel(
             val billResult = repository.createBill(
                 userId = currentUserId,
                 bill = bill,
-                initialPaid = initialPaid,
+                initialPaid = roundMoney(initialPaid),
                 initialMode = initialMode,
                 initialReceivedIn = initialReceivedIn
             )
             if (billResult.isSuccess) {
                 _cloudStatus.value = "Cloud synced"
-                _toastMessages.tryEmit("Customer & invoice saved")
+                _toastMessages.tryEmit(
+                    if (matchedCustomer != null) {
+                        "Added $billNo to existing user ${matchedCustomer.name}"
+                    } else {
+                        "Customer & invoice saved ($billNo)"
+                    }
+                )
                 val newId = billResult.getOrNull().orEmpty()
                 if (newId.isNotBlank()) {
                     _selectedInvoiceId.value = newId
@@ -382,6 +482,75 @@ class BillingViewModel(
         }
     }
 
+    fun updateBill(
+        original: Bill,
+        season: String,
+        date: String,
+        landAmount: Double,
+        unit: LandUnit,
+        ratePerBigha: Double,
+        previousDue: Double,
+        note: String,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val cleanLand = landAmount.coerceAtLeast(0.0)
+        val cleanRate = roundMoney(ratePerBigha.coerceAtLeast(0.0))
+        val cleanPrev = roundMoney(previousDue.coerceAtLeast(0.0))
+        val bigha = calculateBigha(cleanLand, unit)
+        val currentAmount = roundMoney(bigha * cleanRate)
+        val grandTotal = roundMoney(currentAmount + cleanPrev)
+        if (grandTotal <= 0.0) {
+            _toastMessages.tryEmit("Total bill amount must be greater than ₹0")
+            onComplete(false)
+            return
+        }
+        val updated = original.copy(
+            date = date.ifBlank { original.date },
+            season = season.trim(),
+            landAmount = cleanLand,
+            unit = unit.key,
+            bigha = bigha,
+            rate = cleanRate,
+            current = currentAmount,
+            previousDue = cleanPrev,
+            allTotal = grandTotal,
+            note = note.trim()
+        )
+        viewModelScope.launch {
+            _cloudStatus.value = "Updating bill…"
+            val result = repository.updateBill(currentUserId, updated)
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Invoice ${original.billNo} updated")
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Update failed"
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to update bill")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteBill(bill: Bill, data: BillingDashboardData, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            _cloudStatus.value = "Undoing bill…"
+            val paymentIds = data.payments.filter { it.billId == bill.id }.map { it.id }
+            val result = repository.deleteBillAndPayments(currentUserId, bill.id, paymentIds)
+            if (result.isSuccess) {
+                if (_selectedInvoiceId.value == bill.id) {
+                    _selectedInvoiceId.value = null
+                }
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Invoice ${bill.billNo} deleted")
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Delete failed"
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to delete invoice")
+                onComplete(false)
+            }
+        }
+    }
+
     fun recordPayment(
         bill: Bill,
         amount: Double,
@@ -392,7 +561,8 @@ class BillingViewModel(
         note: String,
         onSaved: () -> Unit
     ) {
-        if (amount <= 0.0 || amount > currentDue + 0.001) {
+        val cleanAmt = roundMoney(amount)
+        if (cleanAmt <= 0.0 || cleanAmt > currentDue + 0.01) {
             _toastMessages.tryEmit("Enter an amount within the outstanding balance")
             return
         }
@@ -403,7 +573,7 @@ class BillingViewModel(
                 billId = bill.id,
                 customerId = bill.customerId,
                 date = date.ifBlank { todayIsoDate() },
-                amount = amount,
+                amount = cleanAmt,
                 mode = mode.label,
                 receivedIn = receivedIn.trim().ifBlank { mode.label },
                 note = note.trim()
@@ -418,6 +588,108 @@ class BillingViewModel(
                 _toastMessages.tryEmit(
                     result.exceptionOrNull()?.localizedMessage ?: "Failed to save payment"
                 )
+            }
+        }
+    }
+
+    fun updatePayment(
+        original: Payment,
+        amount: Double,
+        mode: PaymentMode,
+        receivedIn: String,
+        date: String,
+        note: String,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val cleanAmt = roundMoney(amount)
+        if (cleanAmt <= 0.0) {
+            _toastMessages.tryEmit("Enter a valid payment amount greater than ₹0")
+            onComplete(false)
+            return
+        }
+        val updated = original.copy(
+            date = date.ifBlank { original.date },
+            amount = cleanAmt,
+            mode = mode.label,
+            receivedIn = receivedIn.trim().ifBlank { mode.label },
+            note = note.trim()
+        )
+        viewModelScope.launch {
+            _cloudStatus.value = "Updating payment…"
+            val result = repository.updatePayment(currentUserId, updated)
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Payment updated")
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Update failed"
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to update payment")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deletePayment(paymentId: String, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            _cloudStatus.value = "Undoing payment…"
+            val result = repository.deletePayment(currentUserId, paymentId)
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Payment undone & removed")
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Undo failed"
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to undo payment")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun sendChatMessage(customerId: String, text: String, onSent: () -> Unit = {}) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            val result = repository.sendChatMessage(
+                userId = currentUserId,
+                message = ChatMessage(
+                    userId = currentUserId,
+                    customerId = customerId,
+                    text = trimmed,
+                    sender = "ME",
+                    date = todayIsoDate()
+                )
+            )
+            if (result.isSuccess) {
+                onSent()
+            } else {
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to send message"
+                )
+            }
+        }
+    }
+
+    fun updateChatMessage(messageId: String, newText: String, onComplete: (Boolean) -> Unit = {}) {
+        if (newText.trim().isEmpty()) return
+        viewModelScope.launch {
+            val result = repository.updateChatMessage(currentUserId, messageId, newText.trim())
+            if (result.isSuccess) {
+                _toastMessages.tryEmit("Message updated")
+                onComplete(true)
+            } else {
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to update message")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteChatMessage(messageId: String) {
+        viewModelScope.launch {
+            val result = repository.deleteChatMessage(currentUserId, messageId)
+            if (result.isSuccess) {
+                _toastMessages.tryEmit("Message deleted")
+            } else {
+                _toastMessages.tryEmit(result.exceptionOrNull()?.localizedMessage ?: "Failed to delete message")
             }
         }
     }
@@ -529,6 +801,130 @@ class BillingViewModel(
                 _cloudStatus.value = "Delete failed"
                 _toastMessages.tryEmit(
                     result.exceptionOrNull()?.localizedMessage ?: "Failed to delete expense"
+                )
+            }
+        }
+    }
+
+    fun saveWbsedclConsumer(
+        existingId: String = "",
+        label: String,
+        consumerNo: String,
+        installationNote: String = "",
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val cleanLabel = label.trim()
+        val cleanConsumerNo = consumerNo.trim()
+        if (cleanLabel.isEmpty() || cleanConsumerNo.isEmpty()) {
+            _toastMessages.tryEmit("Enter both a label and WBSEDCL Consumer ID")
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            _cloudStatus.value = "Saving Consumer ID…"
+            val result = repository.saveWbsedclConsumer(
+                currentUserId,
+                WbsedclConsumer(
+                    id = existingId,
+                    userId = currentUserId,
+                    label = cleanLabel,
+                    consumerNo = cleanConsumerNo,
+                    installationNote = installationNote.trim()
+                )
+            )
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit(
+                    if (existingId.isBlank()) "Consumer ID saved" else "Consumer ID updated"
+                )
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Cloud save failed"
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to save Consumer ID"
+                )
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteWbsedclConsumer(consumerId: String) {
+        viewModelScope.launch {
+            _cloudStatus.value = "Deleting Consumer ID…"
+            val result = repository.deleteWbsedclConsumer(currentUserId, consumerId)
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Consumer ID removed")
+            } else {
+                _cloudStatus.value = "Delete failed"
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to remove Consumer ID"
+                )
+            }
+        }
+    }
+
+    fun saveWbsedclPayment(
+        existingId: String = "",
+        consumerId: String = "",
+        consumerNo: String,
+        consumerLabel: String = "",
+        billMonth: String,
+        amountPaid: Double,
+        date: String,
+        note: String = "",
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        val cleanConsumerNo = consumerNo.trim()
+        val cleanMonth = billMonth.trim()
+        val cleanAmount = roundMoney(amountPaid)
+        if (cleanConsumerNo.isEmpty() || cleanMonth.isEmpty() || cleanAmount <= 0.0) {
+            _toastMessages.tryEmit("Enter Consumer ID, Bill Month, and valid amount")
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch {
+            _cloudStatus.value = "Saving WBSEDCL payment…"
+            val result = repository.saveWbsedclPayment(
+                currentUserId,
+                WbsedclBillPayment(
+                    id = existingId,
+                    userId = currentUserId,
+                    consumerNo = cleanConsumerNo,
+                    consumerLabel = consumerLabel.trim(),
+                    billMonth = cleanMonth,
+                    amount = cleanAmount,
+                    date = date.ifBlank { todayIsoDate() },
+                    note = note.trim()
+                )
+            )
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit(
+                    if (existingId.isBlank()) "Electricity bill payment saved" else "Electricity payment updated"
+                )
+                onComplete(true)
+            } else {
+                _cloudStatus.value = "Cloud save failed"
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to save electricity payment"
+                )
+                onComplete(false)
+            }
+        }
+    }
+
+    fun deleteWbsedclPayment(paymentId: String) {
+        viewModelScope.launch {
+            _cloudStatus.value = "Deleting payment…"
+            val result = repository.deleteWbsedclPayment(currentUserId, paymentId)
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                _toastMessages.tryEmit("Electricity payment deleted")
+            } else {
+                _cloudStatus.value = "Delete failed"
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to delete payment"
                 )
             }
         }

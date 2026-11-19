@@ -1,5 +1,15 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,11 +34,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CurrencyRupee
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -64,15 +79,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.Bill
 import com.example.data.model.BillStatus
 import com.example.data.model.BillingDashboardData
+import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BillRowItem
+import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
+import com.example.ui.theme.BmwTelemetryStyle
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldMint
@@ -82,6 +101,12 @@ import com.example.ui.theme.PaidBadgeFg
 import com.example.util.BillDesignModel
 import com.example.util.BillPrintSize
 import com.example.util.InvoicePrinter
+
+private enum class BillSortOption(val label: String) {
+    NEWEST("Newest"),
+    OLDEST("Oldest"),
+    HIGHEST_DUE("Highest Due")
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -94,6 +119,11 @@ fun HistoryScreen(
     onOpenMonthlyAnalytics: () -> Unit = {},
     onOpenExpenses: () -> Unit = {},
     onViewInvoice: (String) -> Unit,
+    onEditBill: ((Bill) -> Unit)? = null,
+    onDeleteBill: ((Bill) -> Unit)? = null,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null,
+    bengaliLabels: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,6 +131,9 @@ fun HistoryScreen(
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Bills, 1 = Payments, 2 = Village Due
     var selectedStatus by remember { mutableStateOf<BillStatus?>(null) }
     var selectedSeason by remember { mutableStateOf("All Seasons") }
+    var selectedSort by remember { mutableStateOf(BillSortOption.NEWEST) }
+    var selectedPaymentMode by remember { mutableStateOf("All Modes") }
+    var expandedVillage by remember { mutableStateOf<String?>(null) }
 
     val billMap = remember(data.bills) { data.bills.associateBy { it.id } }
     val customerMap = remember(data.customers) { data.customers.associateBy { it.id } }
@@ -113,6 +146,12 @@ fun HistoryScreen(
             .sorted()
     }
 
+    val paymentModeOptions = remember(data.payments) {
+        val base = listOf("All Modes", "Cash", "UPI", "Bank", PaymentMode.SETTLEMENT.label)
+        val extra = data.payments.map { it.mode.trim() }.filter { it.isNotBlank() }.distinct()
+        (base + extra).distinctBy { it.lowercase() }
+    }
+
     val totalBilled = remember(data.bills) { data.bills.sumOf { it.current } }
     val totalCollected = remember(data.payments) { data.payments.sumOf { it.amount } }
     val totalOutstanding = remember(data.customers, data.bills, data.payments) {
@@ -121,10 +160,15 @@ fun HistoryScreen(
     val collectionEfficiency = if (totalBilled > 0.0) {
         (totalCollected / totalBilled).toFloat().coerceIn(0f, 1f)
     } else 0f
+    val animatedEfficiency by animateFloatAsState(
+        targetValue = collectionEfficiency,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "history_recovery_progress"
+    )
 
-    val filteredBills = remember(data.bills, data.payments, searchQuery, selectedStatus, selectedSeason) {
+    val filteredBills = remember(data.bills, data.payments, searchQuery, selectedStatus, selectedSeason, selectedSort) {
         val q = searchQuery.trim().lowercase()
-        data.bills.filter { bill ->
+        val matched = data.bills.filter { bill ->
             val matchesQuery = q.isEmpty() || listOf(
                 bill.billNo,
                 bill.customerName,
@@ -136,24 +180,33 @@ fun HistoryScreen(
             val matchesSeason = selectedSeason == "All Seasons" ||
                 bill.season.equals(selectedSeason, ignoreCase = true)
             matchesQuery && matchesStatus && matchesSeason
-        }.sortedByDescending { it.date }
+        }
+        when (selectedSort) {
+            BillSortOption.NEWEST -> matched.sortedByDescending { it.date }
+            BillSortOption.OLDEST -> matched.sortedBy { it.date }
+            BillSortOption.HIGHEST_DUE -> matched.sortedByDescending { data.dueForBill(it) }
+        }
     }
 
-    val filteredPayments = remember(data.payments, billMap, customerMap, searchQuery) {
+    val filteredPayments = remember(data.payments, billMap, customerMap, searchQuery, selectedPaymentMode) {
         val q = searchQuery.trim().lowercase()
         data.payments
             .sortedByDescending { it.date }
             .filter { p ->
                 val bill = billMap[p.billId]
                 val cust = customerMap[p.customerId]
-                q.isEmpty() || listOf(
+                val matchesMode = selectedPaymentMode == "All Modes" ||
+                    p.mode.equals(selectedPaymentMode, ignoreCase = true)
+                val matchesQuery = q.isEmpty() || listOf(
                     cust?.name.orEmpty(),
                     cust?.village.orEmpty(),
                     bill?.customerName.orEmpty(),
                     bill?.billNo.orEmpty(),
                     p.mode,
-                    p.receivedIn
+                    p.receivedIn,
+                    p.note
                 ).joinToString(" ").lowercase().contains(q)
+                matchesMode && matchesQuery
             }
     }
 
@@ -185,9 +238,14 @@ fun HistoryScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Premium History Header + Summary KPI Strip + Collection Progress + Relocated P&L / Expenses Pills
+        // Redesigned BMW-Precision History Telemetry Header & Filter Deck
         item {
             AshaPanelCard {
+                BmwPrecisionStripe(
+                    height = 2.5.dp,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -195,22 +253,28 @@ fun HistoryScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(11.dp)
                     ) {
                         IosSquircleIcon(
                             icon = Icons.Rounded.History,
-                            containerColor = Color(0xFF5856D6),
-                            size = 38.dp,
-                            iconSize = 20.dp
+                            containerColor = Color(0xFFAF52DE),
+                            size = 40.dp,
+                            iconSize = 21.dp
                         )
-                        Column {
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                text = "LEDGER ARCHIVE",
+                                style = BmwTelemetryStyle,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                             Text(
                                 text = "History",
                                 style = MaterialTheme.typography.headlineSmall,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "${data.bills.size} bills · ${data.payments.size} payments",
+                                text = "${data.bills.size} bills · ${data.payments.size} receipts · ${villageSummaries.size} villages",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -221,11 +285,11 @@ fun HistoryScreen(
                         Surface(
                             onClick = onOpenMonthlyAnalytics,
                             shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
                             modifier = Modifier.testTag("history_pnl_chart_chip")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -239,7 +303,7 @@ fun HistoryScreen(
                                     text = "P&L",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
@@ -251,7 +315,7 @@ fun HistoryScreen(
                             modifier = Modifier.testTag("history_expenses_chip")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -265,7 +329,7 @@ fun HistoryScreen(
                                     text = "Cost",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
@@ -274,70 +338,75 @@ fun HistoryScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Financial KPI Strip
+                // High-contrast Financial Telemetry Strip
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     HistorySummaryPill(
-                        label = "Billed",
+                        label = "BILLED",
                         value = formatInr(totalBilled),
                         bg = MaterialTheme.colorScheme.surfaceVariant,
                         fg = MaterialTheme.colorScheme.onSurface,
+                        accentBar = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.weight(1f)
                     )
                     HistorySummaryPill(
-                        label = "Collected",
+                        label = "COLLECTED",
                         value = formatInr(totalCollected),
                         bg = PaidBadgeBg,
                         fg = PaidBadgeFg,
+                        accentBar = PaidBadgeFg,
                         modifier = Modifier.weight(1f)
                     )
                     HistorySummaryPill(
-                        label = "Due",
+                        label = "DUE",
                         value = formatInr(totalOutstanding),
                         bg = CrimsonContainer,
                         fg = CrimsonDue,
+                        accentBar = CrimsonDue,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Collection Rate Meter
+                // Animated Collection Recovery Gauge
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Overall Recovery Rate",
-                                style = MaterialTheme.typography.labelSmall,
+                                text = "OVERALL RECOVERY RATE",
+                                style = BmwTelemetryStyle,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
                                 text = "${(collectionEfficiency * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.ExtraBold
                             )
                         }
                         LinearProgressIndicator(
-                            progress = { collectionEfficiency },
+                            progress = { animatedEfficiency },
                             color = EmeraldPrimary,
                             trackColor = MaterialTheme.colorScheme.surface,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(6.dp))
+                                .height(7.dp)
+                                .clip(RoundedCornerShape(8.dp))
                         )
                     }
                 }
@@ -357,7 +426,7 @@ fun HistoryScreen(
                         }
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("history_search_input")
@@ -372,7 +441,7 @@ fun HistoryScreen(
                         onClick = { selectedTab = 0 },
                         modifier = Modifier.testTag("history_tab_bills")
                     ) {
-                        Text("Bills (${data.bills.size})", fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text("Bills (${data.bills.size})", fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
@@ -380,7 +449,7 @@ fun HistoryScreen(
                         onClick = { selectedTab = 1 },
                         modifier = Modifier.testTag("history_tab_payments")
                     ) {
-                        Text("Pay (${data.payments.size})", fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text("Pay (${data.payments.size})", fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
@@ -388,188 +457,342 @@ fun HistoryScreen(
                         onClick = { selectedTab = 2 },
                         modifier = Modifier.testTag("history_tab_villages")
                     ) {
-                        Text("Village (${villageSummaries.size})", fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text("Village (${villageSummaries.size})", fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                 }
 
-                if (selectedTab == 0) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = selectedStatus == null,
-                            onClick = { selectedStatus = null },
-                            label = { Text("All") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("filter_status_all")
-                        )
-                        BillStatus.entries.forEach { status ->
+                // Contextual filter strip per tab
+                AnimatedVisibility(visible = selectedTab == 0) {
+                    Column(modifier = Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             FilterChip(
-                                selected = selectedStatus == status,
-                                onClick = { selectedStatus = status },
-                                label = { Text(status.label) },
+                                selected = selectedStatus == null,
+                                onClick = { selectedStatus = null },
+                                label = { Text("All") },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                     selectedLabelColor = MaterialTheme.colorScheme.primary
                                 ),
-                                modifier = Modifier.testTag("filter_status_${status.name.lowercase()}")
+                                modifier = Modifier.testTag("filter_status_all")
                             )
+                            BillStatus.entries.forEach { status ->
+                                FilterChip(
+                                    selected = selectedStatus == status,
+                                    onClick = { selectedStatus = status },
+                                    label = { Text(status.label) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier.testTag("filter_status_${status.name.lowercase()}")
+                                )
+                            }
                         }
-                    }
 
-                    if (seasonOptions.size > 1) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        // Sort pills row
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            seasonOptions.forEach { seasonLabel ->
-                                val active = selectedSeason == seasonLabel
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Sort,
+                                contentDescription = "Sort bills",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            BillSortOption.entries.forEach { sortOpt ->
                                 FilterChip(
-                                    selected = active,
-                                    onClick = { selectedSeason = seasonLabel },
-                                    label = { Text(seasonLabel, fontSize = 11.5.sp) },
+                                    selected = selectedSort == sortOpt,
+                                    onClick = { selectedSort = sortOpt },
+                                    label = { Text(sortOpt.label, fontSize = 11.5.sp) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = EmeraldMint,
-                                        selectedLabelColor = EmeraldPrimary
-                                    )
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                    ),
+                                    modifier = Modifier.testTag("history_sort_${sortOpt.name.lowercase()}")
                                 )
                             }
+                        }
+
+                        if (seasonOptions.size > 1) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                seasonOptions.forEach { seasonLabel ->
+                                    val active = selectedSeason == seasonLabel
+                                    FilterChip(
+                                        selected = active,
+                                        onClick = { selectedSeason = seasonLabel },
+                                        label = { Text(seasonLabel, fontSize = 11.5.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = EmeraldMint,
+                                            selectedLabelColor = EmeraldPrimary
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AnimatedVisibility(visible = selectedTab == 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        paymentModeOptions.forEach { modeLabel ->
+                            FilterChip(
+                                selected = selectedPaymentMode.equals(modeLabel, ignoreCase = true),
+                                onClick = { selectedPaymentMode = modeLabel },
+                                label = { Text(modeLabel, fontSize = 11.5.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = PaidBadgeBg,
+                                    selectedLabelColor = PaidBadgeFg
+                                ),
+                                modifier = Modifier.testTag("history_pay_mode_${modeLabel.lowercase().replace(" ", "_")}")
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Content List
+        // Animated Content Panel
         item {
             AshaPanelCard {
-                when (selectedTab) {
-                    0 -> {
-                        if (filteredBills.isEmpty()) {
-                            EmptyHistoryState(
-                                icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                                title = "No bills found",
-                                subtitle = if (searchQuery.isNotBlank() || selectedStatus != null) {
-                                    "Try clearing your search or filters"
-                                } else {
-                                    ""
-                                }
-                            )
-                        } else {
-                            Column {
-                                filteredBills.forEachIndexed { idx, bill ->
-                                    BillRowItem(
-                                        bill = bill,
-                                        data = data,
-                                        onViewClick = { onViewInvoice(bill.id) },
-                                        showQuickActions = true,
-                                        defaultDesign = defaultBillDesign,
-                                        defaultSize = defaultPrintSize,
-                                        qrMode = qrMode,
-                                        customQrPath = customQrPath
+                AnimatedContent(
+                    targetState = selectedTab,
+                    transitionSpec = {
+                        (fadeIn(tween(200)) + slideInVertically(tween(220)) { it / 24 }) togetherWith fadeOut(tween(150))
+                    },
+                    label = "history_tab_content"
+                ) { tab ->
+                    when (tab) {
+                        0 -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                // Filtered summary ribbon
+                                val filteredSum = remember(filteredBills) { filteredBills.sumOf { it.current } }
+                                val filteredDue = remember(filteredBills, data.payments) { filteredBills.sumOf { data.dueForBill(it) } }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "SHOWING ${filteredBills.size} BILLS",
+                                        style = BmwTelemetryStyle,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    if (idx < filteredBills.lastIndex) {
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    Text(
+                                        text = "Total ${formatInr(filteredSum)} · Due ${formatInr(filteredDue)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                                if (filteredBills.isEmpty()) {
+                                    EmptyHistoryState(
+                                        icon = Icons.AutoMirrored.Rounded.ReceiptLong,
+                                        title = "No bills found",
+                                        subtitle = if (searchQuery.isNotBlank() || selectedStatus != null || selectedSeason != "All Seasons") {
+                                            "Try clearing your search or filters"
+                                        } else {
+                                            "Bills you create will appear here"
+                                        }
+                                    )
+                                } else {
+                                    Column {
+                                        filteredBills.forEachIndexed { idx, bill ->
+                                            BillRowItem(
+                                                bill = bill,
+                                                data = data,
+                                                onViewClick = { onViewInvoice(bill.id) },
+                                                showQuickActions = true,
+                                                defaultDesign = defaultBillDesign,
+                                                defaultSize = defaultPrintSize,
+                                                qrMode = qrMode,
+                                                customQrPath = customQrPath,
+                                                bengaliLabels = bengaliLabels,
+                                                onEditBill = onEditBill,
+                                                onDeleteBill = onDeleteBill
+                                            )
+                                            if (idx < filteredBills.lastIndex) {
+                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    1 -> {
-                        if (filteredPayments.isEmpty()) {
-                            EmptyHistoryState(
-                                icon = Icons.Rounded.AccountBalanceWallet,
-                                title = "No payments yet",
-                                subtitle = ""
-                            )
-                        } else {
+                        1 -> {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                filteredPayments.forEach { payment ->
-                                    val bill = billMap[payment.billId]
-                                    val cust = customerMap[payment.customerId]
-                                    val custName = cust?.name ?: bill?.customerName ?: "Customer"
-                                    val isSettlement = payment.mode.equals(PaymentMode.SETTLEMENT.label, ignoreCase = true)
+                                val filteredPaySum = remember(filteredPayments) { filteredPayments.sumOf { it.amount } }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${filteredPayments.size} RECEIPTS (${selectedPaymentMode.uppercase()})",
+                                        style = BmwTelemetryStyle,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = formatInr(filteredPaySum),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = PaidBadgeFg,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable(enabled = bill != null) {
-                                                if (bill != null) onViewInvoice(bill.id)
+                                if (filteredPayments.isEmpty()) {
+                                    EmptyHistoryState(
+                                        icon = Icons.Rounded.AccountBalanceWallet,
+                                        title = "No payments found",
+                                        subtitle = if (selectedPaymentMode != "All Modes" || searchQuery.isNotBlank()) {
+                                            "Try selecting All Modes or clearing search"
+                                        } else {
+                                            "Recorded customer payments appear here"
+                                        }
+                                    )
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        filteredPayments.forEach { payment ->
+                                            val bill = billMap[payment.billId]
+                                            val cust = customerMap[payment.customerId]
+                                            val custName = cust?.name ?: bill?.customerName ?: "Customer"
+                                            val isSettlement = payment.mode.equals(PaymentMode.SETTLEMENT.label, ignoreCase = true)
+                                            val modeColor = when {
+                                                isSettlement -> Color(0xFFFF9500)
+                                                payment.mode.equals("UPI", ignoreCase = true) -> Color(0xFF007AFF)
+                                                payment.mode.equals("Bank", ignoreCase = true) -> Color(0xFF5856D6)
+                                                else -> Color(0xFF34C759)
                                             }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(12.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.weight(1f),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                            ) {
-                                                IosSquircleIcon(
-                                                    icon = Icons.Rounded.CurrencyRupee,
-                                                    containerColor = if (isSettlement) Color(0xFFFF9500) else Color(0xFF34C759),
-                                                    size = 38.dp,
-                                                    iconSize = 19.dp
-                                                )
-                                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                    Text(
-                                                        text = custName,
-                                                        style = MaterialTheme.typography.titleSmall,
-                                                        color = MaterialTheme.colorScheme.onSurface,
-                                                        fontWeight = FontWeight.Bold,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    Text(
-                                                        text = "${bill?.billNo ?: "Ledger"} · ${payment.date}${if (payment.receivedIn.isNotBlank()) " · ${payment.receivedIn}" else ""}",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    if (payment.note.isNotBlank()) {
-                                                        Text(
-                                                            text = payment.note,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.primary,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
+
+                                            Surface(
+                                                shape = RoundedCornerShape(16.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable(enabled = bill != null) {
+                                                        if (bill != null) onViewInvoice(bill.id)
                                                     }
-                                                }
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Column(horizontalAlignment = Alignment.End) {
-                                                Text(
-                                                    text = formatInr(payment.amount),
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    color = PaidBadgeFg,
-                                                    fontWeight = FontWeight.ExtraBold
-                                                )
-                                                Surface(
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = if (isSettlement) AmberBadgeBg else PaidBadgeBg
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    Text(
-                                                        text = payment.mode,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = if (isSettlement) AmberBadgeFg else PaidBadgeFg,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                                    )
+                                                    Row(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        IosSquircleIcon(
+                                                            icon = Icons.Rounded.CurrencyRupee,
+                                                            containerColor = modeColor,
+                                                            size = 38.dp,
+                                                            iconSize = 19.dp
+                                                        )
+                                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                            Text(
+                                                                text = custName,
+                                                                style = MaterialTheme.typography.titleSmall,
+                                                                color = MaterialTheme.colorScheme.onSurface,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = "${bill?.billNo ?: "Ledger"} · ${payment.date}${if (payment.receivedIn.isNotBlank()) " · ${payment.receivedIn}" else ""}",
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            if (payment.note.isNotBlank()) {
+                                                                Text(
+                                                                    text = payment.note,
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = MaterialTheme.colorScheme.primary,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                    ) {
+                                                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                            Text(
+                                                                text = formatInr(payment.amount),
+                                                                style = MaterialTheme.typography.titleSmall,
+                                                                color = PaidBadgeFg,
+                                                                fontWeight = FontWeight.ExtraBold
+                                                            )
+                                                            Surface(
+                                                                shape = RoundedCornerShape(10.dp),
+                                                                color = if (isSettlement) AmberBadgeBg else PaidBadgeBg
+                                                            ) {
+                                                                Text(
+                                                                    text = payment.mode,
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = if (isSettlement) AmberBadgeFg else PaidBadgeFg,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                        if (onEditPayment != null) {
+                                                            IconButton(
+                                                                onClick = { onEditPayment(payment) },
+                                                                modifier = Modifier
+                                                                    .size(34.dp)
+                                                                    .testTag("history_edit_payment_${payment.id}")
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.Edit,
+                                                                    contentDescription = "Edit payment",
+                                                                    tint = MaterialTheme.colorScheme.primary,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                        if (onDeletePayment != null) {
+                                                            IconButton(
+                                                                onClick = { onDeletePayment(payment) },
+                                                                modifier = Modifier
+                                                                    .size(34.dp)
+                                                                    .testTag("history_delete_payment_${payment.id}")
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.DeleteOutline,
+                                                                    contentDescription = "Undo payment",
+                                                                    tint = CrimsonDue,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -577,163 +800,193 @@ fun HistoryScreen(
                                 }
                             }
                         }
-                    }
 
-                    else -> {
-                        if (villageSummaries.isEmpty()) {
-                            EmptyHistoryState(
-                                icon = Icons.Rounded.LocationOn,
-                                title = "No village records",
-                                subtitle = ""
-                            )
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                villageSummaries.forEach { summary ->
-                                    val ratio = if (summary.totalBilled > 0.0) {
-                                        (summary.totalCollected / summary.totalBilled).toFloat().coerceIn(0f, 1f)
-                                    } else 0f
+                        else -> {
+                            if (villageSummaries.isEmpty()) {
+                                EmptyHistoryState(
+                                    icon = Icons.Rounded.LocationOn,
+                                    title = "No village records",
+                                    subtitle = "Add customers with village names to track area-wise dues"
+                                )
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text(
+                                        text = "${villageSummaries.size} VILLAGES · TAP TO EXPAND DUES",
+                                        style = BmwTelemetryStyle,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    villageSummaries.forEach { summary ->
+                                        val ratio = if (summary.totalBilled > 0.0) {
+                                            (summary.totalCollected / summary.totalBilled).toFloat().coerceIn(0f, 1f)
+                                        } else 0f
+                                        val animatedRatio by animateFloatAsState(
+                                            targetValue = ratio,
+                                            animationSpec = spring(stiffness = Spring.StiffnessLow),
+                                            label = "village_ratio_${summary.villageName}"
+                                        )
+                                        val isExpanded = expandedVillage == summary.villageName
+                                        val dueCustomers = summary.customers.filter { data.dueForCustomer(it.id) > 0.001 }
 
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(14.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        Surface(
+                                            shape = RoundedCornerShape(16.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                            modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
+                                            Column(
+                                                modifier = Modifier.padding(14.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
                                                 Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            expandedVillage = if (isExpanded) null else summary.villageName
+                                                        },
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    IosSquircleIcon(
-                                                        icon = Icons.Rounded.LocationOn,
-                                                        containerColor = Color(0xFFFF3B30),
-                                                        size = 34.dp,
-                                                        iconSize = 18.dp
-                                                    )
-                                                    Column {
-                                                        Text(
-                                                            text = summary.villageName,
-                                                            style = MaterialTheme.typography.titleMedium,
-                                                            fontWeight = FontWeight.Bold
+                                                    Row(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                                                    ) {
+                                                        IosSquircleIcon(
+                                                            icon = Icons.Rounded.LocationOn,
+                                                            containerColor = Color(0xFFFF3B30),
+                                                            size = 36.dp,
+                                                            iconSize = 18.dp
                                                         )
-                                                        Text(
-                                                            text = "${summary.customers.size} customers · ${summary.dueCustomerCount} pending due",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        Column {
+                                                            Text(
+                                                                text = summary.villageName,
+                                                                style = MaterialTheme.typography.titleMedium,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = "${summary.customers.size} customers · ${summary.dueCustomerCount} pending due",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (summary.totalDue > 0.001) CrimsonContainer else PaidBadgeBg
+                                                        ) {
+                                                            Text(
+                                                                text = if (summary.totalDue > 0.001) formatInr(summary.totalDue) else "Settled",
+                                                                style = MaterialTheme.typography.labelMedium,
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                color = if (summary.totalDue > 0.001) CrimsonDue else PaidBadgeFg,
+                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                                            )
+                                                        }
+                                                        Icon(
+                                                            imageVector = if (isExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                                            contentDescription = if (isExpanded) "Collapse village" else "Expand village",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                         )
                                                     }
                                                 }
 
-                                                Surface(
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    color = if (summary.totalDue > 0.001) CrimsonContainer else PaidBadgeBg
+                                                LinearProgressIndicator(
+                                                    progress = { animatedRatio },
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    trackColor = MaterialTheme.colorScheme.outlineVariant,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(6.dp)
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                )
+
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween
                                                 ) {
                                                     Text(
-                                                        text = if (summary.totalDue > 0.001) formatInr(summary.totalDue) else "Settled",
-                                                        style = MaterialTheme.typography.labelMedium,
-                                                        fontWeight = FontWeight.ExtraBold,
-                                                        color = if (summary.totalDue > 0.001) CrimsonDue else PaidBadgeFg,
-                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                                        text = "Billed: ${formatInr(summary.totalBilled)}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        text = "Collected: ${formatInr(summary.totalCollected)}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = PaidBadgeFg,
+                                                        fontWeight = FontWeight.SemiBold
                                                     )
                                                 }
-                                            }
 
-                                            LinearProgressIndicator(
-                                                progress = { ratio },
-                                                color = MaterialTheme.colorScheme.primary,
-                                                trackColor = MaterialTheme.colorScheme.outlineVariant,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(6.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
-                                            )
-
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Text(
-                                                    text = "Billed: ${formatInr(summary.totalBilled)}",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Text(
-                                                    text = "Collected: ${formatInr(summary.totalCollected)}",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = PaidBadgeFg,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            }
-
-                                            val dueCustomers = summary.customers.filter { data.dueForCustomer(it.id) > 0.001 }
-                                            if (dueCustomers.isNotEmpty()) {
-                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                                dueCustomers.forEach { cust ->
-                                                    val custDue = data.dueForCustomer(cust.id)
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                            Text(
-                                                                text = cust.name,
-                                                                style = MaterialTheme.typography.bodySmall,
-                                                                fontWeight = FontWeight.SemiBold,
-                                                                maxLines = 1,
-                                                                overflow = TextOverflow.Ellipsis
-                                                            )
-                                                            if (cust.phone.isNotBlank()) {
-                                                                Text(
-                                                                    text = cust.phone,
-                                                                    style = MaterialTheme.typography.labelSmall,
-                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                                )
-                                                            }
-                                                        }
-                                                        Row(
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                                        ) {
-                                                            Text(
-                                                                text = formatInr(custDue),
-                                                                style = MaterialTheme.typography.labelMedium,
-                                                                color = CrimsonDue,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                            IconButton(
-                                                                onClick = { InvoicePrinter.dialCustomer(context, cust.phone) },
-                                                                modifier = Modifier.size(36.dp)
+                                                AnimatedVisibility(visible = isExpanded && dueCustomers.isNotEmpty()) {
+                                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                        dueCustomers.forEach { cust ->
+                                                            val custDue = data.dueForCustomer(cust.id)
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                                verticalAlignment = Alignment.CenterVertically
                                                             ) {
-                                                                Icon(
-                                                                    imageVector = Icons.Rounded.Call,
-                                                                    contentDescription = "Call ${cust.name}",
-                                                                    tint = EmeraldPrimary,
-                                                                    modifier = Modifier.size(16.dp)
-                                                                )
-                                                            }
-                                                            IconButton(
-                                                                onClick = {
-                                                                    val company = data.settings.company.ifBlank { "আশা মিনি শ্যালো" }
-                                                                    val msg = "Hello ${cust.name}, reminder from $company: your pending irrigation balance is ${formatInr(custDue)}. Please settle at your convenience."
-                                                                    InvoicePrinter.openWhatsAppOrShare(context, cust.phone, msg)
-                                                                },
-                                                                modifier = Modifier.size(36.dp)
-                                                            ) {
-                                                                Icon(
-                                                                    imageVector = Icons.Rounded.NotificationsActive,
-                                                                    contentDescription = "Remind ${cust.name}",
-                                                                    tint = AmberBadgeFg,
-                                                                    modifier = Modifier.size(16.dp)
-                                                                )
+                                                                Column(modifier = Modifier.weight(1f)) {
+                                                                    Text(
+                                                                        text = cust.name,
+                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                        fontWeight = FontWeight.SemiBold,
+                                                                        maxLines = 1,
+                                                                        overflow = TextOverflow.Ellipsis
+                                                                    )
+                                                                    if (cust.phone.isNotBlank()) {
+                                                                        Text(
+                                                                            text = cust.phone,
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                        )
+                                                                    }
+                                                                }
+                                                                Row(
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = formatInr(custDue),
+                                                                        style = MaterialTheme.typography.labelMedium,
+                                                                        color = CrimsonDue,
+                                                                        fontWeight = FontWeight.Bold
+                                                                    )
+                                                                    IconButton(
+                                                                        onClick = { InvoicePrinter.dialCustomer(context, cust.phone) },
+                                                                        modifier = Modifier.size(44.dp)
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = Icons.Rounded.Call,
+                                                                            contentDescription = "Call ${cust.name}",
+                                                                            tint = EmeraldPrimary,
+                                                                            modifier = Modifier.size(18.dp)
+                                                                        )
+                                                                    }
+                                                                    IconButton(
+                                                                        onClick = {
+                                                                            val company = data.settings.company.ifBlank { "আশা মিনি শ্যালো" }
+                                                                            val msg = "Hello ${cust.name}, reminder from $company: your pending irrigation balance is ${formatInr(custDue)}. Please settle at your convenience."
+                                                                            InvoicePrinter.openWhatsAppOrShare(context, cust.phone, msg)
+                                                                        },
+                                                                        modifier = Modifier.size(44.dp)
+                                                                    ) {
+                                                                        Icon(
+                                                                            imageVector = Icons.Rounded.NotificationsActive,
+                                                                            contentDescription = "Remind ${cust.name}",
+                                                                            tint = AmberBadgeFg,
+                                                                            modifier = Modifier.size(18.dp)
+                                                                        )
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -757,6 +1010,7 @@ private fun HistorySummaryPill(
     value: String,
     bg: Color,
     fg: Color,
+    accentBar: Color,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -766,18 +1020,28 @@ private fun HistorySummaryPill(
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            Box(
+                modifier = Modifier
+                    .width(22.dp)
+                    .height(2.5.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(accentBar)
+            )
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.85f)
+                style = BmwTelemetryStyle,
+                fontSize = 9.sp,
+                color = fg.copy(alpha = 0.85f),
+                maxLines = 1
             )
             Text(
                 text = value,
                 style = MaterialTheme.typography.titleSmall,
                 color = fg,
                 fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.3).sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -794,13 +1058,13 @@ private fun EmptyHistoryState(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 24.dp),
+            .padding(vertical = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
+                .size(52.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
@@ -814,7 +1078,8 @@ private fun EmptyHistoryState(
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Bold
         )
         if (subtitle.isNotBlank()) {
             Text(

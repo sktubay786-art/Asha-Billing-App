@@ -1,6 +1,16 @@
 package com.example.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -61,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -84,12 +95,18 @@ import com.example.R
 import com.example.auth.signOut
 import com.example.data.model.Bill
 import com.example.data.model.Customer
+import com.example.data.model.Payment
 import com.example.data.model.formatInr
 import com.example.security.AppPreferencesStore
 import com.example.security.AppThemeMode
 import com.example.security.BiometricGateScreen
 import com.example.security.ThemeColorOption
 import com.example.security.checkBiometricAvailability
+import com.example.ui.components.AnimatedIosNavBadge
+import com.example.ui.components.BmwPrecisionBadge
+import com.example.ui.components.BmwPrecisionStripe
+import com.example.ui.components.EditBillDialog
+import com.example.ui.components.EditPaymentDialog
 import com.example.ui.components.InvoiceDetailDialog
 import com.example.ui.components.IosAppLogoMark
 import com.example.ui.components.PremiumCalculatorIcon
@@ -105,6 +122,7 @@ import com.example.ui.screens.PaymentsScreen
 import com.example.ui.screens.SettleCustomerDialog
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.UserChatLedgerScreen
+import com.example.ui.screens.WbsedclScreen
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.viewmodel.BillingViewModel
 import com.example.ui.viewmodel.UiState
@@ -124,6 +142,7 @@ sealed interface AppRoute {
     @Serializable data object Expenses : AppRoute
     @Serializable data object MonthlyAnalytics : AppRoute
     @Serializable data object Calculator : AppRoute
+    @Serializable data object Wbsedcl : AppRoute
     @Serializable data object Settings : AppRoute
 }
 
@@ -131,17 +150,18 @@ private data class NavItemSpec(
     val route: AppRoute,
     val label: String,
     val icon: ImageVector,
+    val accentColor: Color,
     val tag: String
 )
 
 private val V103BottomDestinations = listOf(
-    NavItemSpec(AppRoute.Overview, "Home", Icons.Rounded.Home, "nav_overview"),
-    NavItemSpec(AppRoute.Customers, "Users", Icons.Rounded.People, "nav_customers"),
-    NavItemSpec(AppRoute.NewBill, "Bill", Icons.AutoMirrored.Rounded.ReceiptLong, "nav_new_bill"),
-    NavItemSpec(AppRoute.Payments, "Pay", Icons.Rounded.CurrencyRupee, "nav_payments"),
-    NavItemSpec(AppRoute.History, "History", Icons.Rounded.History, "nav_history"),
-    NavItemSpec(AppRoute.Calculator, "Calculator", Icons.Rounded.Calculate, "nav_calculator"),
-    NavItemSpec(AppRoute.Settings, "Settings", Icons.Rounded.Settings, "nav_settings")
+    NavItemSpec(AppRoute.Overview, "Home", Icons.Rounded.Home, Color(0xFF0B6B50), "nav_overview"),
+    NavItemSpec(AppRoute.Customers, "Users", Icons.Rounded.People, Color(0xFF007AFF), "nav_customers"),
+    NavItemSpec(AppRoute.NewBill, "Bill", Icons.AutoMirrored.Rounded.ReceiptLong, Color(0xFF5856D6), "nav_new_bill"),
+    NavItemSpec(AppRoute.Payments, "Pay", Icons.Rounded.CurrencyRupee, Color(0xFF34C759), "nav_payments"),
+    NavItemSpec(AppRoute.History, "History", Icons.Rounded.History, Color(0xFFAF52DE), "nav_history"),
+    NavItemSpec(AppRoute.Calculator, "Calculator", Icons.Rounded.Calculate, Color(0xFFFF9500), "nav_calculator"),
+    NavItemSpec(AppRoute.Settings, "Settings", Icons.Rounded.Settings, Color(0xFF64748B), "nav_settings")
 )
 
 @Composable
@@ -195,6 +215,7 @@ fun AshaAppShell(
         currentDest?.hasRoute(AppRoute.Expenses::class) == true -> "Expenses"
         currentDest?.hasRoute(AppRoute.MonthlyAnalytics::class) == true -> "P&L Chart"
         currentDest?.hasRoute(AppRoute.Calculator::class) == true -> "Calculator"
+        currentDest?.hasRoute(AppRoute.Wbsedcl::class) == true -> "WBSEDCL"
         currentDest?.hasRoute(AppRoute.Settings::class) == true -> "Settings"
         else -> "Home"
     }
@@ -205,12 +226,19 @@ fun AshaAppShell(
     var previewDraftBill by remember { mutableStateOf<Bill?>(null) }
     var previewDraftDesign by remember { mutableStateOf<BillDesignModel?>(null) }
     var previewDraftSize by remember { mutableStateOf<BillPrintSize?>(null) }
+    var bengaliBillMode by remember { mutableStateOf(false) }
 
     // WhatsApp-style full-screen user ledger chat state
     var activeChatCustomerId by remember { mutableStateOf<String?>(null) }
     var editingChatCustomer by remember { mutableStateOf<Customer?>(null) }
     var settlingChatCustomer by remember { mutableStateOf<Customer?>(null) }
     var deletingChatCustomer by remember { mutableStateOf<Customer?>(null) }
+
+    // Bill & Payment undo / fix / delete modal state
+    var editingBillTarget by remember { mutableStateOf<Bill?>(null) }
+    var deletingBillTarget by remember { mutableStateOf<Bill?>(null) }
+    var editingPaymentTarget by remember { mutableStateOf<Payment?>(null) }
+    var deletingPaymentTarget by remember { mutableStateOf<Payment?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.toastMessages.collect { msg ->
@@ -370,6 +398,7 @@ fun AshaAppShell(
                                     defaultPrintSize = defaultPrintSize,
                                     qrMode = localPrefs.qrMode,
                                     customQrPath = localPrefs.qrImagePath,
+                                    bengaliLabels = bengaliBillMode,
                                     onBack = { activeChatCustomerId = null },
                                     onNewBill = {
                                         activeChatCustomerId = null
@@ -402,13 +431,35 @@ fun AshaAppShell(
                                         }
                                     },
                                     onDeleteCustomer = { deletingChatCustomer = activeChatCustomer },
-                                    onViewInvoice = { billId -> viewModel.openInvoice(billId) }
+                                    onViewInvoice = { billId -> viewModel.openInvoice(billId) },
+                                    onEditBill = { editingBillTarget = it },
+                                    onDeleteBill = { deletingBillTarget = it },
+                                    onEditPayment = { editingPaymentTarget = it },
+                                    onDeletePayment = { deletingPaymentTarget = it },
+                                    onSendChatMessage = { text, onSent ->
+                                        viewModel.sendChatMessage(activeChatCustomer.id, text, onSent)
+                                    },
+                                    onUpdateChatMessage = { msg, newText, onDone ->
+                                        viewModel.updateChatMessage(msg.id, newText) { ok ->
+                                            if (ok) onDone()
+                                        }
+                                    },
+                                    onDeleteChatMessage = { msgId ->
+                                        viewModel.deleteChatMessage(msgId)
+                                    }
                                 )
                             }
                         } else {
                             NavHost(
                                 navController = navController,
-                                startDestination = AppRoute.Overview
+                                startDestination = AppRoute.Overview,
+                                enterTransition = {
+                                    fadeIn(animationSpec = tween(220)) +
+                                        slideInVertically(animationSpec = tween(240)) { it / 24 }
+                                },
+                                exitTransition = { fadeOut(animationSpec = tween(160)) },
+                                popEnterTransition = { fadeIn(animationSpec = tween(200)) },
+                                popExitTransition = { fadeOut(animationSpec = tween(150)) }
                             ) {
                                 composable<AppRoute.Overview> {
                                     OverviewScreen(
@@ -431,6 +482,7 @@ fun AshaAppShell(
                                         onOpenCustomerChat = { cust -> activeChatCustomerId = cust.id },
                                         onReceivePayment = { navigateTo(AppRoute.Payments) },
                                         onOpenCalculator = { navigateTo(AppRoute.Calculator) },
+                                        onOpenWbsedcl = { navigateTo(AppRoute.Wbsedcl) },
                                         onOpenExpenses = { navigateTo(AppRoute.Expenses) },
                                         onOpenMonthlyAnalytics = { navigateTo(AppRoute.MonthlyAnalytics) },
                                         onViewHistory = { navigateTo(AppRoute.History) },
@@ -480,11 +532,14 @@ fun AshaAppShell(
                                     } else {
                                         NewBillScreen(
                                             data = dashboardData,
+                                            nextBillNo = viewModel.nextBillNumber(dashboardData.bills),
                                             preselectedCustomerId = preselectedCustomerId,
                                             defaultBillDesign = localPrefs.defaultBillTemplate,
                                             defaultPrintSize = localPrefs.defaultPrintSize,
                                             qrMode = localPrefs.qrMode,
                                             customQrPath = localPrefs.qrImagePath,
+                                            defaultBengaliMode = bengaliBillMode,
+                                            onToggleBengaliMode = { bengaliBillMode = it },
                                             onConsumePreselectedCustomer = { viewModel.consumePreselectedCustomer() },
                                             onPreviewBill = { draft, design, size ->
                                                 previewDraftDesign = design
@@ -562,7 +617,10 @@ fun AshaAppShell(
                                                     note = note,
                                                     onSaved = onSaved
                                                 )
-                                            }
+                                            },
+                                            onEditPayment = { editingPaymentTarget = it },
+                                            onDeletePayment = { deletingPaymentTarget = it },
+                                            defaultPrintSize = defaultPrintSize
                                         )
                                     }
                                 }
@@ -591,7 +649,12 @@ fun AshaAppShell(
                                                 previewDraftDesign = null
                                                 previewDraftSize = null
                                                 viewModel.openInvoice(billId)
-                                            }
+                                            },
+                                            onEditBill = { editingBillTarget = it },
+                                            onDeleteBill = { deletingBillTarget = it },
+                                            onEditPayment = { editingPaymentTarget = it },
+                                            onDeletePayment = { deletingPaymentTarget = it },
+                                            bengaliLabels = bengaliBillMode
                                         )
                                     }
                                 }
@@ -646,6 +709,41 @@ fun AshaAppShell(
                                     }
                                 }
 
+                                composable<AppRoute.Wbsedcl> {
+                                    BackHandler { navigateTo(AppRoute.Overview) }
+                                    WbsedclScreen(
+                                        data = dashboardData,
+                                        onSaveConsumer = { existingId, label, consumerNo, installationNote, onComplete ->
+                                            viewModel.saveWbsedclConsumer(
+                                                existingId = existingId,
+                                                label = label,
+                                                consumerNo = consumerNo,
+                                                installationNote = installationNote,
+                                                onComplete = onComplete
+                                            )
+                                        },
+                                        onDeleteConsumer = { consumerId ->
+                                            viewModel.deleteWbsedclConsumer(consumerId)
+                                        },
+                                        onSavePayment = { existingId, consumerId, consumerNo, consumerLabel, billMonth, amountPaid, date, note, onComplete ->
+                                            viewModel.saveWbsedclPayment(
+                                                existingId = existingId,
+                                                consumerId = consumerId,
+                                                consumerNo = consumerNo,
+                                                consumerLabel = consumerLabel,
+                                                billMonth = billMonth,
+                                                amountPaid = amountPaid,
+                                                date = date,
+                                                note = note,
+                                                onComplete = onComplete
+                                            )
+                                        },
+                                        onDeletePayment = { paymentId ->
+                                            viewModel.deleteWbsedclPayment(paymentId)
+                                        }
+                                    )
+                                }
+
                                 composable<AppRoute.Settings> {
                                     BackHandler { navigateTo(AppRoute.Overview) }
                                     SettingsScreen(
@@ -677,6 +775,16 @@ fun AshaAppShell(
                                 initialPrintSizeLabel = (previewDraftSize ?: defaultPrintSize).label,
                                 qrMode = localPrefs.qrMode,
                                 customQrPath = localPrefs.qrImagePath,
+                                initialBengaliMode = bengaliBillMode,
+                                onToggleBengaliMode = { bengaliBillMode = it },
+                                onEditBill = if (activeInvoice.id.isNotBlank()) {
+                                    { editingBillTarget = it }
+                                } else null,
+                                onDeleteBill = if (activeInvoice.id.isNotBlank()) {
+                                    { deletingBillTarget = it }
+                                } else null,
+                                onEditPayment = { editingPaymentTarget = it },
+                                onDeletePayment = { deletingPaymentTarget = it },
                                 onDismiss = {
                                     previewDraftBill = null
                                     previewDraftDesign = null
@@ -742,6 +850,116 @@ fun AshaAppShell(
                                 },
                                 dismissButton = {
                                     TextButton(onClick = { deletingChatCustomer = null }) {
+                                        Text(stringResource(R.string.cancel))
+                                    }
+                                }
+                            )
+                        }
+
+                        editingBillTarget?.let { targetBill ->
+                            EditBillDialog(
+                                bill = targetBill,
+                                onDismiss = { editingBillTarget = null },
+                                onConfirm = { season, date, landAmount, unit, ratePerBigha, previousDue, note ->
+                                    viewModel.updateBill(
+                                        original = targetBill,
+                                        season = season,
+                                        date = date,
+                                        landAmount = landAmount,
+                                        unit = unit,
+                                        ratePerBigha = ratePerBigha,
+                                        previousDue = previousDue,
+                                        note = note
+                                    ) { ok ->
+                                        if (ok) editingBillTarget = null
+                                    }
+                                }
+                            )
+                        }
+
+                        deletingBillTarget?.let { targetBill ->
+                            AlertDialog(
+                                onDismissRequest = { deletingBillTarget = null },
+                                title = { Text("Undo / Delete ${targetBill.billNo}?") },
+                                text = {
+                                    Text(
+                                        "Delete invoice ${targetBill.billNo} for ${targetBill.customerName} (${formatInr(targetBill.allTotal)}) and any payments recorded against it?"
+                                    )
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            viewModel.deleteBill(targetBill, dashboardData) { ok ->
+                                                if (ok) {
+                                                    if (selectedInvoiceId == targetBill.id) {
+                                                        viewModel.openInvoice(null)
+                                                    }
+                                                    deletingBillTarget = null
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CrimsonDue)
+                                    ) {
+                                        Text("Undo & Delete")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { deletingBillTarget = null }) {
+                                        Text(stringResource(R.string.cancel))
+                                    }
+                                }
+                            )
+                        }
+
+                        editingPaymentTarget?.let { targetPayment ->
+                            val linkedBillNo = dashboardData.bills
+                                .firstOrNull { it.id == targetPayment.billId }?.billNo
+                                ?: "Payment"
+                            EditPaymentDialog(
+                                payment = targetPayment,
+                                billNo = linkedBillNo,
+                                onDismiss = { editingPaymentTarget = null },
+                                onConfirm = { amount, mode, receivedIn, date, note ->
+                                    viewModel.updatePayment(
+                                        original = targetPayment,
+                                        amount = amount,
+                                        mode = mode,
+                                        receivedIn = receivedIn,
+                                        date = date,
+                                        note = note
+                                    ) { ok ->
+                                        if (ok) editingPaymentTarget = null
+                                    }
+                                }
+                            )
+                        }
+
+                        deletingPaymentTarget?.let { targetPayment ->
+                            val linkedBillNo = dashboardData.bills
+                                .firstOrNull { it.id == targetPayment.billId }?.billNo
+                                ?: "Customer Ledger"
+                            AlertDialog(
+                                onDismissRequest = { deletingPaymentTarget = null },
+                                title = { Text("Undo Payment?") },
+                                text = {
+                                    Text(
+                                        "Remove payment of ${formatInr(targetPayment.amount)} (${targetPayment.mode}) from $linkedBillNo? The customer's balance will automatically recalculate."
+                                    )
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            viewModel.deletePayment(targetPayment.id) { ok ->
+                                                if (ok) deletingPaymentTarget = null
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CrimsonDue)
+                                    ) {
+                                        Text("Undo Payment")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { deletingPaymentTarget = null }) {
                                         Text(stringResource(R.string.cancel))
                                     }
                                 }
@@ -827,23 +1045,13 @@ private fun V103EmeraldHeaderBanner(
                                 text = headerTitle,
                                 style = MaterialTheme.typography.titleLarge,
                                 color = Color.White,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 0.25.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color.White.copy(alpha = 0.22f)
-                            ) {
-                                Text(
-                                    text = activeSection,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                )
-                            }
+                            BmwPrecisionBadge(label = activeSection)
                         }
                     }
                 }
@@ -851,6 +1059,16 @@ private fun V103EmeraldHeaderBanner(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Clean Frosted Glass Header Dock (Lock & Sync only; P&L Chart, Expenses, Theme live inside app sections)
+                val syncSpinTransition = rememberInfiniteTransition(label = "header_sync_spin")
+                val syncAngle by syncSpinTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(950, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "sync_rotation"
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (biometricEnabled) {
                         HeaderGlassIconButton(
@@ -865,11 +1083,14 @@ private fun V103EmeraldHeaderBanner(
                         icon = Icons.Rounded.Sync,
                         contentDescription = stringResource(R.string.sync_now),
                         highlighted = isSyncing,
+                        rotationDegrees = if (isSyncing) syncAngle else 0f,
                         tag = "topbar_sync_button",
                         onClick = onSyncClick
                     )
                 }
             }
+
+            BmwPrecisionStripe(height = 2.dp)
 
             // Live Ticker & Status Capsules
             Row(
@@ -954,6 +1175,7 @@ private fun HeaderGlassIconButton(
     icon: ImageVector,
     contentDescription: String,
     highlighted: Boolean,
+    rotationDegrees: Float = 0f,
     tag: String,
     onClick: () -> Unit
 ) {
@@ -972,7 +1194,9 @@ private fun HeaderGlassIconButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = Color.White,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier
+                .size(18.dp)
+                .rotate(rotationDegrees)
         )
     }
 }
@@ -998,7 +1222,7 @@ private fun V103FloatingBottomBar(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 10.dp,
+            shadowElevation = 12.dp,
             tonalElevation = 2.dp
         ) {
             Row(
@@ -1010,6 +1234,11 @@ private fun V103FloatingBottomBar(
             ) {
                 V103BottomDestinations.forEach { item ->
                     val selected = isRouteSelected(item.route)
+                    val activeAccent = if (item.route == AppRoute.Overview) primaryColor else item.accentColor
+                    val labelColor by animateColorAsState(
+                        targetValue = if (selected) activeAccent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        label = "nav_label_color"
+                    )
                     val displayLabel = if (!isWideLayout && item.label == "Calculator") {
                         "Calc"
                     } else {
@@ -1024,54 +1253,35 @@ private fun V103FloatingBottomBar(
                             .padding(vertical = 4.dp)
                             .testTag(item.tag),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         if (item.route == AppRoute.Calculator) {
                             PremiumCalculatorIcon(
-                                size = if (isWideLayout) 38.dp else 32.dp,
+                                size = if (isWideLayout) 38.dp else 33.dp,
                                 active = selected
                             )
                         } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(if (isWideLayout) 38.dp else 32.dp)
-                                    .clip(RoundedCornerShape(11.dp))
-                                    .background(
-                                        if (selected) {
-                                            Brush.verticalGradient(
-                                                listOf(
-                                                    primaryColor.copy(alpha = 0.88f),
-                                                    primaryColor
-                                                )
-                                            )
-                                        } else {
-                                            Brush.verticalGradient(
-                                                listOf(
-                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                                                )
-                                            )
-                                        }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = item.icon,
-                                    contentDescription = item.label,
-                                    tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(if (isWideLayout) 20.dp else 18.dp)
-                                )
-                            }
+                            AnimatedIosNavBadge(
+                                icon = item.icon,
+                                contentDescription = item.label,
+                                selected = selected,
+                                activeColor = activeAccent,
+                                inactiveBg = MaterialTheme.colorScheme.surfaceVariant,
+                                inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                size = if (isWideLayout) 38.dp else 33.dp,
+                                iconSize = if (isWideLayout) 20.dp else 18.dp
+                            )
                         }
                         Text(
                             text = displayLabel,
                             fontSize = if (isWideLayout) 11.sp else 9.5.sp,
                             lineHeight = 12.sp,
+                            letterSpacing = if (selected) 0.25.sp else 0.sp,
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            color = if (selected) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                            color = labelColor,
+                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
                         )
                     }
                 }

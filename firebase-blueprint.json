@@ -30,6 +30,7 @@
         "address": { "type": "string" },
         "openingDue": { "type": "number" },
         "landArea": { "type": "string" },
+        "landUnit": { "type": "string", "enum": ["decimal", "katha", "bigha"] },
         "landOwnerType": { "type": "string", "enum": ["Own", "Other"] },
         "landOwnerName": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
@@ -98,6 +99,52 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
       },
       "required": ["userId", "title", "category", "amount", "date", "paidMode", "note", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Manual chat message or ledger note sent within a customer's ledger chat.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "text": { "type": "string" },
+        "sender": { "type": "string", "enum": ["ME", "CUSTOMER"] },
+        "date": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "customerId", "text", "sender", "date", "createdAt", "updatedAt"]
+    },
+    "WbsedclConsumer": {
+      "title": "WbsedclConsumer",
+      "description": "Saved WBSEDCL electricity consumer ID with a custom pump/shallow label.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "consumerNo": { "type": "string" },
+        "label": { "type": "string" },
+        "installationNote": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "consumerNo", "label", "installationNote", "createdAt", "updatedAt"]
+    },
+    "WbsedclBillPayment": {
+      "title": "WbsedclBillPayment",
+      "description": "Recorded WBSEDCL electricity bill payment for expense tracking.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "consumerNo": { "type": "string" },
+        "consumerLabel": { "type": "string" },
+        "billMonth": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["userId", "consumerNo", "consumerLabel", "billMonth", "amount", "date", "note", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -120,6 +167,18 @@
     "/users/{userId}/expenses/{expenseId}": {
       "schema": { "$ref": "#/entities/Expense" },
       "description": "Operational business expenses for dashboard profit and loss overview."
+    },
+    "/users/{userId}/chatMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Manual chat notes and owner messages linked to a customer ledger."
+    },
+    "/users/{userId}/wbsedclConsumers/{consumerId}": {
+      "schema": { "$ref": "#/entities/WbsedclConsumer" },
+      "description": "Saved WBSEDCL electricity consumer IDs with custom labels."
+    },
+    "/users/{userId}/wbsedclPayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/WbsedclBillPayment" },
+      "description": "Recorded WBSEDCL electricity bill payments for expense history."
     }
   }
 }

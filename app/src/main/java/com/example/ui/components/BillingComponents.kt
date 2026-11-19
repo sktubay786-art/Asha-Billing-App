@@ -32,22 +32,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AlarmAdd
 import androidx.compose.material.icons.rounded.AlarmOff
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CurrencyRupee
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -91,6 +98,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,9 +109,12 @@ import com.example.data.model.Bill
 import com.example.data.model.BillStatus
 import com.example.data.model.BillingDashboardData
 import com.example.data.model.Customer
+import com.example.data.model.LandUnit
 import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
+import com.example.data.model.calculateBigha
 import com.example.data.model.formatInr
+import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.example.notifications.BillDueReminder
 import com.example.notifications.DueReminderScheduler
@@ -173,6 +184,20 @@ fun StatusBadge(
 }
 
 @Composable
+fun rememberCallCustomerAction(): (String) -> Unit {
+    val context = LocalContext.current
+    return remember(context) {
+        { rawPhone: String ->
+            if (rawPhone.isBlank()) {
+                Toast.makeText(context, "Customer phone number is not saved", Toast.LENGTH_SHORT).show()
+            } else {
+                InvoicePrinter.dialCustomer(context, rawPhone)
+            }
+        }
+    }
+}
+
+@Composable
 fun BillRowItem(
     bill: Bill,
     data: BillingDashboardData,
@@ -182,6 +207,9 @@ fun BillRowItem(
     defaultSize: BillPrintSize = BillPrintSize.THERMAL_80,
     qrMode: String = "Dynamic amount QR",
     customQrPath: String = "",
+    bengaliLabels: Boolean = false,
+    onEditBill: ((Bill) -> Unit)? = null,
+    onDeleteBill: ((Bill) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -194,6 +222,8 @@ fun BillRowItem(
     val scheduledReminder = remember(reminders, bill.id) {
         reminders.firstOrNull { it.billId == bill.id && it.enabled }
     }
+    var rowMenuExpanded by remember { mutableStateOf(false) }
+    var showPrintSizePicker by remember { mutableStateOf(false) }
 
     val pdfSaverLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
@@ -211,7 +241,8 @@ fun BillRowItem(
                         design = defaultDesign,
                         size = defaultSize,
                         qrMode = qrMode,
-                        customQrPath = customQrPath
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliLabels
                     )
                 }
             }.onSuccess {
@@ -232,7 +263,7 @@ fun BillRowItem(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(modifier = Modifier.weight(1.2f)) {
                 Text(
@@ -307,6 +338,51 @@ fun BillRowItem(
                     fontWeight = FontWeight.SemiBold
                 )
             }
+
+            if (onEditBill != null || onDeleteBill != null) {
+                Box {
+                    IconButton(
+                        onClick = { rowMenuExpanded = true },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("bill_row_menu_${bill.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "Bill options",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = rowMenuExpanded,
+                        onDismissRequest = { rowMenuExpanded = false }
+                    ) {
+                        if (onEditBill != null) {
+                            DropdownMenuItem(
+                                text = { Text("Edit / Fix Bill") },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    rowMenuExpanded = false
+                                    onEditBill(bill)
+                                }
+                            )
+                        }
+                        if (onDeleteBill != null) {
+                            DropdownMenuItem(
+                                text = { Text("Undo / Delete Bill", color = CrimsonDue) },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CrimsonDue)
+                                },
+                                onClick = {
+                                    rowMenuExpanded = false
+                                    onDeleteBill(bill)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         if (showQuickActions) {
@@ -317,25 +393,11 @@ fun BillRowItem(
                 BillMiniIconAction(
                     icon = Icons.Rounded.Print,
                     label = "Print",
-                    onClick = {
-                        InvoicePrinter.printInvoice(
-                            context = context,
-                            settings = data.settings,
-                            bill = bill,
-                            payments = payments,
-                            paid = paid,
-                            due = due,
-                            design = defaultDesign,
-                            printSize = defaultSize,
-                            qrMode = qrMode,
-                            customQrPath = customQrPath
-                        )
-                    },
-                    modifier = Modifier.weight(1f)
+                    onClick = { showPrintSizePicker = true },
+                    modifier = Modifier.weight(0.9f)
                 )
-                BillMiniIconAction(
-                    icon = Icons.Rounded.Image,
-                    label = "WA Bill",
+                BillMiniIconActionCustom(
+                    label = "WhatsApp Bill",
                     onClick = {
                         BillDocumentEngine.sendBillImageReminderToWhatsApp(
                             context = context,
@@ -347,16 +409,40 @@ fun BillRowItem(
                             design = defaultDesign,
                             size = defaultSize,
                             qrMode = qrMode,
-                            customQrPath = customQrPath
+                            customQrPath = customQrPath,
+                            bengaliLabels = bengaliLabels
                         )
                     },
-                    modifier = Modifier.weight(1.05f)
+                    iconContent = { IosWhatsAppBillIcon(size = 18.dp) },
+                    modifier = Modifier.weight(1.35f)
                 )
                 BillMiniIconAction(
                     icon = Icons.Rounded.PictureAsPdf,
                     label = "PDF",
-                    onClick = { pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf") },
-                    modifier = Modifier.weight(0.9f)
+                    onClick = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            BillDocumentEngine.saveBillPdfToDownloads(
+                                context = context,
+                                settings = data.settings,
+                                bill = bill,
+                                payments = payments,
+                                paid = paid,
+                                due = due,
+                                design = defaultDesign,
+                                size = defaultSize,
+                                qrMode = qrMode,
+                                customQrPath = customQrPath,
+                                bengaliLabels = bengaliLabels
+                            ).onSuccess {
+                                Toast.makeText(context, "Saved PDF to Downloads/ASHA_Bills", Toast.LENGTH_SHORT).show()
+                            }.onFailure {
+                                pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf")
+                            }
+                        } else {
+                            pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf")
+                        }
+                    },
+                    modifier = Modifier.weight(0.8f)
                 )
                 BillMiniIconAction(
                     icon = Icons.Rounded.NotificationsActive,
@@ -365,10 +451,33 @@ fun BillRowItem(
                         val msg = BillDocumentEngine.buildBillReminderMessage(data.settings, bill, due)
                         InvoicePrinter.openWhatsAppOrShare(context, bill.phone, msg)
                     },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(0.95f)
                 )
             }
         }
+    }
+
+    if (showPrintSizePicker) {
+        PrintSizePickerDialog(
+            initialSize = defaultSize,
+            onSizeSelected = { chosenSize ->
+                showPrintSizePicker = false
+                InvoicePrinter.printInvoice(
+                    context = context,
+                    settings = data.settings,
+                    bill = bill,
+                    payments = payments,
+                    paid = paid,
+                    due = due,
+                    design = defaultDesign,
+                    printSize = chosenSize,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliLabels
+                )
+            },
+            onDismiss = { showPrintSizePicker = false }
+        )
     }
 }
 
@@ -379,30 +488,49 @@ private fun BillMiniIconAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    BillMiniIconActionCustom(
+        label = label,
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-        modifier = modifier.height(36.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 6.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        iconContent = {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(15.dp)
             )
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun BillMiniIconActionCustom(
+    label: String,
+    onClick: () -> Unit,
+    iconContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        modifier = modifier.height(38.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            iconContent()
             Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = label,
-                fontSize = 10.5.sp,
+                fontSize = 9.5.sp,
+                lineHeight = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -463,6 +591,12 @@ fun InvoiceDetailDialog(
     initialPrintSizeLabel: String = BillPrintSize.THERMAL_80.label,
     qrMode: String = "Dynamic amount QR",
     customQrPath: String = "",
+    initialBengaliMode: Boolean = false,
+    onToggleBengaliMode: ((Boolean) -> Unit)? = null,
+    onEditBill: ((Bill) -> Unit)? = null,
+    onDeleteBill: ((Bill) -> Unit)? = null,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -486,6 +620,8 @@ fun InvoiceDetailDialog(
     }
     var pendingAlarmScheduleAfterPerm by remember { mutableStateOf(false) }
     var passDisplayMode by remember { mutableIntStateOf(0) } // 0 = iOS Wallet Pass, 1 = Print Sheet
+    var bengaliMode by remember(initialBengaliMode) { mutableStateOf(initialBengaliMode) }
+    var showPrintSizeDialog by remember { mutableStateOf(false) }
 
     fun scheduleDueNow(targetDate: String, targetHour: Int) {
         val rem = BillDueReminder(
@@ -536,7 +672,8 @@ fun InvoiceDetailDialog(
         selectedDesign,
         selectedSize,
         qrMode,
-        customQrPath
+        customQrPath,
+        bengaliMode
     ) {
         BillDocumentEngine.renderBillBitmap(
             settings = data.settings,
@@ -547,7 +684,8 @@ fun InvoiceDetailDialog(
             design = selectedDesign,
             size = selectedSize,
             qrMode = qrMode,
-            customQrPath = customQrPath
+            customQrPath = customQrPath,
+            bengaliLabels = bengaliMode
         )
     }
 
@@ -567,7 +705,8 @@ fun InvoiceDetailDialog(
                         design = selectedDesign,
                         size = selectedSize,
                         qrMode = qrMode,
-                        customQrPath = customQrPath
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliMode
                     )
                 }
             }.onSuccess {
@@ -630,30 +769,67 @@ fun InvoiceDetailDialog(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
                                 color = Color(selectedDesign.primaryColorInt).copy(alpha = 0.14f)
                             ) {
                                 Text(
-                                    text = "WALLET PASS",
-                                    fontSize = 10.5.sp,
+                                    text = "PASS",
+                                    fontSize = 10.sp,
                                     letterSpacing = 1.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = Color(selectedDesign.primaryColorInt),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
                                 )
                             }
                             Text(
                                 text = bill.billNo,
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (bill.id != "preview" && onEditBill != null) {
+                                IconButton(
+                                    onClick = { onEditBill(bill) },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .testTag("overlay_edit_bill_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Edit,
+                                        contentDescription = "Edit Bill",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                            }
+                            if (bill.id != "preview" && onDeleteBill != null) {
+                                IconButton(
+                                    onClick = { onDeleteBill(bill) },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(CrimsonContainer)
+                                        .testTag("overlay_delete_bill_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Delete Bill",
+                                        tint = CrimsonDue,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                            }
                             IconButton(
                                 onClick = {
                                     BillDocumentEngine.shareBillImageWithReminder(
@@ -666,11 +842,12 @@ fun InvoiceDetailDialog(
                                         design = selectedDesign,
                                         size = selectedSize,
                                         qrMode = qrMode,
-                                        customQrPath = customQrPath
+                                        customQrPath = customQrPath,
+                                        bengaliLabels = bengaliMode
                                     )
                                 },
                                 modifier = Modifier
-                                    .size(38.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape)
                                     .background(MaterialTheme.colorScheme.primaryContainer)
                                     .testTag("overlay_quick_share_button")
@@ -679,14 +856,14 @@ fun InvoiceDetailDialog(
                                     imageVector = Icons.Rounded.Share,
                                     contentDescription = "Share Bill Pass",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
 
                             IconButton(
                                 onClick = onDismiss,
                                 modifier = Modifier
-                                    .size(38.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape)
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                                     .testTag("close_invoice_dialog_button")
@@ -695,30 +872,65 @@ fun InvoiceDetailDialog(
                                     imageVector = Icons.Rounded.Close,
                                     contentDescription = stringResource(R.string.close),
                                     tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                         }
                     }
 
-                    // View Switcher: iOS Wallet Pass vs Print Sheet
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            selected = passDisplayMode == 0,
-                            onClick = { passDisplayMode = 0 },
-                            modifier = Modifier.testTag("preview_mode_wallet_pass")
-                        ) {
-                            Text("iOS Wallet Pass", fontWeight = FontWeight.SemiBold)
+                    // View Switcher: iOS Wallet Pass vs Print Sheet + Bengali Toggle Pill
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+                            SegmentedButton(
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                selected = passDisplayMode == 0,
+                                onClick = { passDisplayMode = 0 },
+                                modifier = Modifier.testTag("preview_mode_wallet_pass")
+                            ) {
+                                Text("Wallet Pass", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            }
+                            SegmentedButton(
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                selected = passDisplayMode == 1,
+                                onClick = { passDisplayMode = 1 },
+                                modifier = Modifier.testTag("preview_mode_print_sheet")
+                            ) {
+                                Text("Print Sheet", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            }
                         }
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            selected = passDisplayMode == 1,
-                            onClick = { passDisplayMode = 1 },
-                            modifier = Modifier.testTag("preview_mode_print_sheet")
-                        ) {
-                            Text("Print Sheet", fontWeight = FontWeight.SemiBold)
-                        }
+
+                        FilterChip(
+                            selected = bengaliMode,
+                            onClick = {
+                                val next = !bengaliMode
+                                bengaliMode = next
+                                onToggleBengaliMode?.invoke(next)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Translate,
+                                    contentDescription = "Toggle Bengali Labels",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = if (bengaliMode) "বাংলা ✓" else "বাংলা",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EmeraldPrimary,
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White
+                            ),
+                            modifier = Modifier.testTag("preview_bengali_toggle")
+                        )
                     }
 
                     // Pass Theme / Bill Model Selector
@@ -888,7 +1100,10 @@ fun InvoiceDetailDialog(
                             status = status,
                             design = selectedDesign,
                             qrBitmap = qrBitmap,
-                            backdropColor = MaterialTheme.colorScheme.background
+                            backdropColor = MaterialTheme.colorScheme.background,
+                            bengaliMode = bengaliMode,
+                            onEditPayment = onEditPayment,
+                            onDeletePayment = onDeletePayment
                         )
                     }
 
@@ -905,7 +1120,8 @@ fun InvoiceDetailDialog(
                                 design = selectedDesign,
                                 size = selectedSize,
                                 qrMode = qrMode,
-                                customQrPath = customQrPath
+                                customQrPath = customQrPath,
+                                bengaliLabels = bengaliMode
                             )
                         },
                         shape = RoundedCornerShape(16.dp),
@@ -932,10 +1148,8 @@ fun InvoiceDetailDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        PreviewActionIconButton(
-                            icon = Icons.AutoMirrored.Rounded.Send,
-                            label = "WA Bill",
-                            iconContainer = Color(0xFF25D366),
+                        PreviewActionIconButtonCustom(
+                            label = "WhatsApp Bill",
                             cardColor = MaterialTheme.colorScheme.surface,
                             textColor = MaterialTheme.colorScheme.onSurface,
                             tag = "bill_image_reminder_button",
@@ -950,10 +1164,12 @@ fun InvoiceDetailDialog(
                                     design = selectedDesign,
                                     size = selectedSize,
                                     qrMode = qrMode,
-                                    customQrPath = customQrPath
+                                    customQrPath = customQrPath,
+                                    bengaliLabels = bengaliMode
                                 )
                             },
-                            modifier = Modifier.weight(1f)
+                            iconContent = { IosWhatsAppBillIcon(size = 32.dp) },
+                            modifier = Modifier.weight(1.25f)
                         )
                         PreviewActionIconButton(
                             icon = Icons.Rounded.Print,
@@ -962,21 +1178,8 @@ fun InvoiceDetailDialog(
                             cardColor = MaterialTheme.colorScheme.surface,
                             textColor = MaterialTheme.colorScheme.onSurface,
                             tag = "print_invoice_button",
-                            onClick = {
-                                InvoicePrinter.printInvoice(
-                                    context = context,
-                                    settings = data.settings,
-                                    bill = bill,
-                                    payments = payments,
-                                    paid = paid,
-                                    due = due,
-                                    design = selectedDesign,
-                                    printSize = selectedSize,
-                                    qrMode = qrMode,
-                                    customQrPath = customQrPath
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
+                            onClick = { showPrintSizeDialog = true },
+                            modifier = Modifier.weight(0.92f)
                         )
                         PreviewActionIconButton(
                             icon = Icons.Rounded.PictureAsPdf,
@@ -985,8 +1188,30 @@ fun InvoiceDetailDialog(
                             cardColor = MaterialTheme.colorScheme.surface,
                             textColor = MaterialTheme.colorScheme.onSurface,
                             tag = "save_pdf_button",
-                            onClick = { pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf") },
-                            modifier = Modifier.weight(1f)
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    BillDocumentEngine.saveBillPdfToDownloads(
+                                        context = context,
+                                        settings = data.settings,
+                                        bill = bill,
+                                        payments = payments,
+                                        paid = paid,
+                                        due = due,
+                                        design = selectedDesign,
+                                        size = selectedSize,
+                                        qrMode = qrMode,
+                                        customQrPath = customQrPath,
+                                        bengaliLabels = bengaliMode
+                                    ).onSuccess {
+                                        Toast.makeText(context, "Saved PDF to Downloads/ASHA_Bills", Toast.LENGTH_SHORT).show()
+                                    }.onFailure {
+                                        pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf")
+                                    }
+                                } else {
+                                    pdfSaverLauncher.launch("ASHA_${bill.billNo}.pdf")
+                                }
+                            },
+                            modifier = Modifier.weight(0.88f)
                         )
                         PreviewActionIconButton(
                             icon = Icons.Rounded.NotificationsActive,
@@ -999,7 +1224,7 @@ fun InvoiceDetailDialog(
                                 val msg = BillDocumentEngine.buildBillReminderMessage(data.settings, bill, due)
                                 InvoicePrinter.openWhatsAppOrShare(context, bill.phone, msg)
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(0.95f)
                         )
                     }
 
@@ -1009,7 +1234,21 @@ fun InvoiceDetailDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Surface(
-                            onClick = { pngSaverLauncher.launch("ASHA_${bill.billNo}.png") },
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    BillDocumentEngine.saveBillPngToDownloads(
+                                        context = context,
+                                        bitmap = previewBitmap,
+                                        bill = bill
+                                    ).onSuccess {
+                                        Toast.makeText(context, "Saved PNG to Downloads/ASHA_Bills", Toast.LENGTH_SHORT).show()
+                                    }.onFailure {
+                                        pngSaverLauncher.launch("ASHA_${bill.billNo}.png")
+                                    }
+                                } else {
+                                    pngSaverLauncher.launch("ASHA_${bill.billNo}.png")
+                                }
+                            },
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surface,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -1156,6 +1395,30 @@ fun InvoiceDetailDialog(
             onDismiss = { showDueDatePicker = false }
         )
     }
+
+    if (showPrintSizeDialog) {
+        PrintSizePickerDialog(
+            initialSize = selectedSize,
+            onSizeSelected = { chosenSize ->
+                selectedSize = chosenSize
+                showPrintSizeDialog = false
+                InvoicePrinter.printInvoice(
+                    context = context,
+                    settings = data.settings,
+                    bill = bill,
+                    payments = payments,
+                    paid = paid,
+                    due = due,
+                    design = selectedDesign,
+                    printSize = chosenSize,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliMode
+                )
+            },
+            onDismiss = { showPrintSizeDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -1168,7 +1431,10 @@ private fun IosWalletBillPassCard(
     status: BillStatus,
     design: BillDesignModel,
     qrBitmap: android.graphics.Bitmap?,
-    backdropColor: Color
+    backdropColor: Color,
+    bengaliMode: Boolean = false,
+    onEditPayment: ((Payment) -> Unit)? = null,
+    onDeletePayment: ((Payment) -> Unit)? = null
 ) {
     val headerTop = Color(design.primaryColorInt)
     val headerBottom = Color(design.secondaryColorInt)
@@ -1248,10 +1514,10 @@ private fun IosWalletBillPassCard(
                     ) {
                         Column {
                             Text(
-                                text = "TOTAL PAYABLE",
+                                text = if (bengaliMode) "মোট মূল্য" else "TOTAL AMOUNT",
                                 fontSize = 9.5.sp,
-                                letterSpacing = 1.sp,
-                                color = Color.White.copy(alpha = 0.72f),
+                                letterSpacing = 0.8.sp,
+                                color = Color.White.copy(alpha = 0.78f),
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
@@ -1265,10 +1531,10 @@ private fun IosWalletBillPassCard(
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "PAID",
+                                    text = if (bengaliMode) "জমা" else "PAID",
                                     fontSize = 9.5.sp,
-                                    letterSpacing = 0.8.sp,
-                                    color = Color.White.copy(alpha = 0.72f),
+                                    letterSpacing = 0.6.sp,
+                                    color = Color.White.copy(alpha = 0.78f),
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
@@ -1280,10 +1546,10 @@ private fun IosWalletBillPassCard(
                             }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "BALANCE DUE",
+                                    text = if (bengaliMode) "মোট বাকি" else "PAYABLE DUE",
                                     fontSize = 9.5.sp,
-                                    letterSpacing = 0.8.sp,
-                                    color = Color.White.copy(alpha = 0.72f),
+                                    letterSpacing = 0.6.sp,
+                                    color = Color.White.copy(alpha = 0.78f),
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
@@ -1328,7 +1594,7 @@ private fun IosWalletBillPassCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     PassFieldCell(
-                        label = "CUSTOMER",
+                        label = if (bengaliMode) "গ্রাহক" else "CUSTOMER",
                         value = bill.customerName,
                         sub = listOfNotNull(
                             bill.phone.takeIf { it.isNotBlank() },
@@ -1337,11 +1603,13 @@ private fun IosWalletBillPassCard(
                         modifier = Modifier.weight(1.1f)
                     )
                     PassFieldCell(
-                        label = "INVOICE & DATE",
+                        label = if (bengaliMode) "বিল নং ও সিজন" else "BILL NO & SEASON",
                         value = bill.billNo,
                         sub = listOfNotNull(
                             bill.date.takeIf { it.isNotBlank() },
-                            bill.season.takeIf { it.isNotBlank() }
+                            bill.season.takeIf { it.isNotBlank() }?.let {
+                                if (bengaliMode) "সিজন: $it" else it
+                            }
                         ).joinToString(" · "),
                         alignEnd = true,
                         modifier = Modifier.weight(0.9f)
@@ -1356,26 +1624,36 @@ private fun IosWalletBillPassCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     PassFieldCell(
-                        label = if (hasLand) "LAND AREA" else "BILL TYPE",
+                        label = when {
+                            bengaliMode && hasLand -> "জমির পরিমাণ ও রেট"
+                            bengaliMode -> "বিলের ধরন"
+                            hasLand -> "LAND & RATE"
+                            else -> "BILL TYPE"
+                        },
                         value = if (hasLand) {
                             "${formatCleanQty(bill.landAmount)} ${bill.unit.uppercase(Locale.US)}"
                         } else {
-                            "Previous Due"
+                            if (bengaliMode) "জের বাকি বিল" else "Previous Due"
                         },
                         sub = if (hasLand) {
-                            "${String.format(Locale.US, "%.2f", bill.bigha)} Bigha @ ${formatInr(bill.rate)}"
+                            val rateLabel = if (bengaliMode) "রেট" else "@"
+                            "${String.format(Locale.US, "%.2f", bill.bigha)} Bigha $rateLabel ${formatInr(bill.rate)}"
                         } else {
-                            "Opening / Carried Balance"
+                            if (bengaliMode) "আগের বাকি হিসাব" else "Opening / Carried Balance"
                         },
                         modifier = Modifier.weight(1f)
                     )
                     PassFieldCell(
-                        label = "BREAKDOWN",
-                        value = if (hasLand) "Curr ${formatInr(bill.current)}" else formatInr(bill.previousDue),
-                        sub = if (bill.previousDue > 0.001 && hasLand) {
-                            "+ Prev Due ${formatInr(bill.previousDue)}"
+                        label = if (bengaliMode) "বর্তমান বিল ও জের বাকি" else "CURRENT & PREV DUE",
+                        value = if (hasLand) {
+                            "${if (bengaliMode) "বর্তমান বিল " else ""}${formatInr(bill.current)}"
                         } else {
-                            "No previous balance"
+                            formatInr(bill.previousDue)
+                        },
+                        sub = if (bill.previousDue > 0.001 && hasLand) {
+                            "${if (bengaliMode) "+ জের বাকি " else "+ Prev Due "}${formatInr(bill.previousDue)}"
+                        } else {
+                            if (bengaliMode) "জের বাকি ₹0" else "No previous balance"
                         },
                         alignEnd = true,
                         modifier = Modifier.weight(1f)
@@ -1386,28 +1664,61 @@ private fun IosWalletBillPassCard(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "RECENT PAYMENTS",
+                            text = if (bengaliMode) "জমা ইতিহাস" else "RECENT PAYMENTS",
                             fontSize = 10.sp,
                             letterSpacing = 0.8.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Bold
                         )
-                        payments.take(3).forEach { p ->
+                        payments.take(4).forEach { p ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "${p.date} · ${p.mode}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                Text(
-                                    text = "+${formatInr(p.amount)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = PaidBadgeFg,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "+${formatInr(p.amount)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = PaidBadgeFg,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (onEditPayment != null) {
+                                        IconButton(
+                                            onClick = { onEditPayment(p) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Edit,
+                                                contentDescription = "Edit payment",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                    if (onDeletePayment != null) {
+                                        IconButton(
+                                            onClick = { onDeletePayment(p) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.DeleteOutline,
+                                                contentDescription = "Undo payment",
+                                                tint = CrimsonDue,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1502,11 +1813,50 @@ private fun IosWalletBillPassCard(
                         }
                     }
                 }
+                // Compact 1D Code 128 Barcode for Customer ID (fast camera lookup)
+                val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+                val customerBarcodeBitmap = remember(customerBarcodeId) {
+                    customerBarcodeId?.let {
+                        BillDocumentEngine.generateCode128BarcodeBitmap(it, widthPx = 560, heightPx = 92)
+                    }
+                }
+                if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Image(
+                                bitmap = customerBarcodeBitmap.asImageBitmap(),
+                                contentDescription = "Customer ID Barcode",
+                                contentScale = ContentScale.FillBounds,
+                                modifier = Modifier
+                                    .fillMaxWidth(0.86f)
+                                    .height(42.dp)
+                            )
+                            Text(
+                                text = "CUSTOMER ID · $customerBarcodeId",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF475569)
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 4. Crisp White Barcode / UPI QR Pass Footer
+            // 4. Crisp White UPI Payment QR Footer (standard square QR)
             Surface(
                 shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
                 color = Color.White,
@@ -1676,6 +2026,8 @@ fun QuickReceivePaymentDialog(
         )
     }
     var selectedMode by remember { mutableStateOf(PaymentMode.CASH) }
+    var paymentDate by remember { mutableStateOf(todayIsoDate()) }
+    var showDatePicker by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -1816,6 +2168,43 @@ fun QuickReceivePaymentDialog(
                     )
                 }
 
+                // Manual Payment Date Picker
+                Surface(
+                    onClick = { showDatePicker = true },
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("quick_receive_date_picker_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Payment Date",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = paymentDate,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Rounded.CalendarMonth,
+                            contentDescription = "Select payment date",
+                            tint = EmeraldPrimary
+                        )
+                    }
+                }
+
                 if (!errorMsg.isNullOrBlank()) {
                     Text(
                         text = errorMsg.orEmpty(),
@@ -1838,7 +2227,7 @@ fun QuickReceivePaymentDialog(
                                 selectedBillPair.second,
                                 selectedMode,
                                 selectedMode.label,
-                                todayIsoDate(),
+                                paymentDate,
                                 note.trim()
                             ) {
                                 onDismiss()
@@ -1862,6 +2251,14 @@ fun QuickReceivePaymentDialog(
             }
         }
     }
+
+    if (showDatePicker) {
+        AshaDatePickerDialog(
+            initialDateIso = paymentDate,
+            onDateSelected = { paymentDate = it },
+            onDismiss = { showDatePicker = false }
+        )
+    }
 }
 
 private fun formatCleanQty(value: Double): String {
@@ -1883,20 +2280,13 @@ private fun PreviewActionIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    PreviewActionIconButtonCustom(
+        label = label,
+        cardColor = cardColor,
+        textColor = textColor,
+        tag = tag,
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = cardColor,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier
-            .height(68.dp)
-            .testTag(tag)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
+        iconContent = {
             IosSquircleIcon(
                 icon = icon,
                 contentDescription = label,
@@ -1904,14 +2294,558 @@ private fun PreviewActionIconButton(
                 size = 32.dp,
                 iconSize = 17.dp
             )
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun PreviewActionIconButtonCustom(
+    label: String,
+    cardColor: Color,
+    textColor: Color,
+    tag: String,
+    onClick: () -> Unit,
+    iconContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = cardColor,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .height(72.dp)
+            .testTag(tag)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            iconContent()
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = label,
-                fontSize = 10.5.sp,
+                fontSize = 9.5.sp,
+                lineHeight = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = textColor,
-                maxLines = 1,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun EditBillDialog(
+    bill: Bill,
+    onDismiss: () -> Unit,
+    onConfirm: (
+        season: String,
+        date: String,
+        landAmount: Double,
+        unit: LandUnit,
+        ratePerBigha: Double,
+        previousDue: Double,
+        note: String
+    ) -> Unit
+) {
+    var season by remember(bill.id) { mutableStateOf(bill.season) }
+    var date by remember(bill.id) { mutableStateOf(bill.date.ifBlank { todayIsoDate() }) }
+    var unit by remember(bill.id) { mutableStateOf(LandUnit.fromKey(bill.unit)) }
+    var landText by remember(bill.id) { mutableStateOf(formatCleanQty(bill.landAmount)) }
+    var rateText by remember(bill.id) { mutableStateOf(formatCleanQty(bill.rate)) }
+    var prevDueText by remember(bill.id) { mutableStateOf(formatCleanQty(bill.previousDue)) }
+    var note by remember(bill.id) { mutableStateOf(bill.note) }
+
+    val landQty = landText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val rateVal = rateText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val prevVal = prevDueText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val bigha = calculateBigha(landQty, unit)
+    val currVal = roundMoney(bigha * rateVal)
+    val totalVal = roundMoney(currVal + prevVal)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Fix / Edit ${bill.billNo}") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "${bill.customerName} · ${bill.phone}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    LandUnit.entries.forEachIndexed { idx, option ->
+                        SegmentedButton(
+                            shape = SegmentedButtonDefaults.itemShape(idx, LandUnit.entries.size),
+                            selected = unit == option,
+                            onClick = { unit = option }
+                        ) {
+                            Text(option.label, fontSize = 11.5.sp)
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = landText,
+                        onValueChange = { landText = it },
+                        label = { Text("Land (${unit.label})") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("edit_bill_land_input")
+                    )
+                    OutlinedTextField(
+                        value = rateText,
+                        onValueChange = { rateText = it },
+                        label = { Text("Rate / Bigha") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("edit_bill_rate_input")
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = prevDueText,
+                        onValueChange = { prevDueText = it },
+                        label = { Text("Prev Due (₹)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("edit_bill_prev_due_input")
+                    )
+                    OutlinedTextField(
+                        value = season,
+                        onValueChange = { season = it },
+                        label = { Text("Season") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+    var showDatePicker by remember { mutableStateOf(false) }
+                OutlinedTextField(
+                    value = date,
+                    onValueChange = { date = it },
+                    label = { Text("Date (YYYY-MM-DD)") },
+                    trailingIcon = {
+                        IconButton(onClick = { showDatePicker = true }) {
+                            Icon(Icons.Rounded.CalendarMonth, contentDescription = "Pick bill date")
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (showDatePicker) {
+                    AshaDatePickerDialog(
+                        initialDateIso = date,
+                        onDateSelected = { date = it },
+                        onDismiss = { showDatePicker = false }
+                    )
+                }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Note") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${String.format(Locale.US, "%.2f", bigha)} Bigha · Curr ${formatInr(currVal)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = formatInr(totalVal),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(season, date, landQty, unit, rateVal, prevVal, note) },
+                enabled = totalVal > 0.0,
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                modifier = Modifier.testTag("save_edit_bill_button")
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+fun EditPaymentDialog(
+    payment: Payment,
+    billNo: String,
+    onDismiss: () -> Unit,
+    onConfirm: (
+        amount: Double,
+        mode: PaymentMode,
+        receivedIn: String,
+        date: String,
+        note: String
+    ) -> Unit
+) {
+    var amountText by remember(payment.id) { mutableStateOf(formatCleanQty(payment.amount)) }
+    var selectedMode by remember(payment.id) { mutableStateOf(PaymentMode.fromLabel(payment.mode)) }
+    var receivedIn by remember(payment.id) { mutableStateOf(payment.receivedIn) }
+    var date by remember(payment.id) { mutableStateOf(payment.date.ifBlank { todayIsoDate() }) }
+    var note by remember(payment.id) { mutableStateOf(payment.note) }
+
+    val amountVal = amountText.toDoubleOrNull() ?: 0.0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Fix Payment ($billNo)") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Amount (₹)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_payment_amount_input")
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PaymentMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = selectedMode == mode,
+                            onClick = {
+                                selectedMode = mode
+                                if (receivedIn.isBlank() || receivedIn in PaymentMode.entries.map { it.label }) {
+                                    receivedIn = mode.label
+                                }
+                            },
+                            label = { Text(mode.label, fontSize = 11.5.sp) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = receivedIn,
+                    onValueChange = { receivedIn = it },
+                    label = { Text("Received In") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                var showEditPayDatePicker by remember { mutableStateOf(false) }
+                OutlinedTextField(
+                    value = date,
+                    onValueChange = { date = it },
+                    label = { Text("Date (YYYY-MM-DD)") },
+                    trailingIcon = {
+                        IconButton(onClick = { showEditPayDatePicker = true }) {
+                            Icon(Icons.Rounded.CalendarMonth, contentDescription = "Pick payment date")
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (showEditPayDatePicker) {
+                    AshaDatePickerDialog(
+                        initialDateIso = date,
+                        onDateSelected = { date = it },
+                        onDismiss = { showEditPayDatePicker = false }
+                    )
+                }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Note") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(amountVal, selectedMode, receivedIn, date, note) },
+                enabled = amountVal > 0.0,
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                modifier = Modifier.testTag("save_edit_payment_button")
+            ) {
+                Text("Update")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+/**
+ * Print Size Selection Dialog shown on EVERY Print action so the owner can choose
+ * A4 · 1/4 Page vs A4 · 1/2 Page (or Thermal / Full A4) right before launching Android Print.
+ */
+@Composable
+fun PrintSizePickerDialog(
+    initialSize: BillPrintSize = BillPrintSize.A4_QUARTER,
+    onSizeSelected: (BillPrintSize) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var chosenSize by remember(initialSize) {
+        mutableStateOf(
+            if (initialSize == BillPrintSize.A4_QUARTER || initialSize == BillPrintSize.A4_HALF) {
+                initialSize
+            } else {
+                BillPrintSize.A4_QUARTER
+            }
+        )
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        IosSquircleIcon(
+                            icon = Icons.Rounded.Print,
+                            containerColor = EmeraldPrimary,
+                            size = 38.dp,
+                            iconSize = 20.dp
+                        )
+                        Column {
+                            Text(
+                                text = "Select Print Size",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "High-resolution crisp bill output",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.close))
+                    }
+                }
+
+                // Primary A4-1/4 vs A4-1/2 Cards
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    PrintSizeChoiceCard(
+                        size = BillPrintSize.A4_QUARTER,
+                        title = "A4 · 1/4 Page",
+                        subtitle = "Top-left slip\n3/4 sheet blank",
+                        selected = chosenSize == BillPrintSize.A4_QUARTER,
+                        onClick = { chosenSize = BillPrintSize.A4_QUARTER },
+                        tag = "print_size_option_a4_quarter",
+                        modifier = Modifier.weight(1f)
+                    )
+                    PrintSizeChoiceCard(
+                        size = BillPrintSize.A4_HALF,
+                        title = "A4 · 1/2 Page",
+                        subtitle = "Top half bill\nExtra readability",
+                        selected = chosenSize == BillPrintSize.A4_HALF,
+                        onClick = { chosenSize = BillPrintSize.A4_HALF },
+                        tag = "print_size_option_a4_half",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Other supported sizes
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "MORE FORMATS",
+                        fontSize = 10.sp,
+                        letterSpacing = 0.8.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            BillPrintSize.THERMAL_80,
+                            BillPrintSize.THERMAL_58,
+                            BillPrintSize.A4_FOUR_UP,
+                            BillPrintSize.A4_INVOICE,
+                            BillPrintSize.COMPACT_A6
+                        ).forEach { size ->
+                            FilterChip(
+                                selected = chosenSize == size,
+                                onClick = { chosenSize = size },
+                                label = { Text(size.label, fontSize = 11.5.sp) },
+                                modifier = Modifier.testTag("print_size_option_${size.name.lowercase()}")
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(0.8f)
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    Button(
+                        onClick = { onSizeSelected(chosenSize) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                        modifier = Modifier
+                            .weight(1.4f)
+                            .height(48.dp)
+                            .testTag("confirm_print_size_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Print,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Print ${chosenSize.label}", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrintSizeChoiceCard(
+    size: BillPrintSize,
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    tag: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) EmeraldPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) EmeraldPrimary else MaterialTheme.colorScheme.outlineVariant
+        ),
+        modifier = modifier.testTag(tag)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Miniature A4 Paper Sheet Diagram
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color.White,
+                border = BorderStroke(1.dp, if (selected) EmeraldPrimary else MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.size(width = 40.dp, height = 54.dp)
+            ) {
+                Box(modifier = Modifier.fillMaxSize().padding(3.dp)) {
+                    if (size.isHalfA4) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(23.dp)
+                                .background(EmeraldPrimary, RoundedCornerShape(3.dp))
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(0.5f)
+                                .height(23.dp)
+                                .background(EmeraldPrimary, RoundedCornerShape(3.dp))
+                        )
+                    }
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (selected) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        tint = EmeraldPrimary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (selected) EmeraldPrimary else MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
         }
     }
