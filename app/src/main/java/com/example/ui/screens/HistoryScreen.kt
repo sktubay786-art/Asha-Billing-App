@@ -85,10 +85,13 @@ import com.example.data.model.BillingDashboardData
 import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
+import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BillRowItem
 import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
+import com.example.ui.components.PremiumHistoryIcon
+import com.example.ui.components.StaggeredPremiumReveal
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
 import com.example.ui.theme.BmwTelemetryStyle
@@ -240,8 +243,9 @@ fun HistoryScreen(
     ) {
         // Redesigned BMW-Precision History Telemetry Header & Filter Deck
         item {
+            StaggeredPremiumReveal(index = 0) {
             AshaPanelCard {
-                BmwPrecisionStripe(
+                AnimatedBmwPrecisionStripe(
                     height = 2.5.dp,
                     modifier = Modifier.padding(bottom = 10.dp)
                 )
@@ -255,11 +259,9 @@ fun HistoryScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(11.dp)
                     ) {
-                        IosSquircleIcon(
-                            icon = Icons.Rounded.History,
-                            containerColor = Color(0xFFAF52DE),
-                            size = 40.dp,
-                            iconSize = 21.dp
+                        PremiumHistoryIcon(
+                            size = 42.dp,
+                            active = true
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(
@@ -563,6 +565,7 @@ fun HistoryScreen(
                         }
                     }
                 }
+            }
             }
         }
 

@@ -1,16 +1,23 @@
 package com.example.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -102,6 +109,7 @@ import com.example.security.AppThemeMode
 import com.example.security.BiometricGateScreen
 import com.example.security.ThemeColorOption
 import com.example.security.checkBiometricAvailability
+import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AnimatedIosNavBadge
 import com.example.ui.components.BmwPrecisionBadge
 import com.example.ui.components.BmwPrecisionStripe
@@ -109,7 +117,14 @@ import com.example.ui.components.EditBillDialog
 import com.example.ui.components.EditPaymentDialog
 import com.example.ui.components.InvoiceDetailDialog
 import com.example.ui.components.IosAppLogoMark
+import com.example.ui.components.PremiumBillIcon
 import com.example.ui.components.PremiumCalculatorIcon
+import com.example.ui.components.PremiumHistoryIcon
+import com.example.ui.components.PremiumHomeIcon
+import com.example.ui.components.PremiumPayIcon
+import com.example.ui.components.PremiumSettingsIcon
+import com.example.ui.components.PremiumUserIcon
+import com.example.ui.components.PulsingLiveDot
 import com.example.ui.screens.CalculatorScreen
 import com.example.ui.screens.CustomerFormDialog
 import com.example.ui.screens.CustomersScreen
@@ -454,12 +469,21 @@ fun AshaAppShell(
                                 navController = navController,
                                 startDestination = AppRoute.Overview,
                                 enterTransition = {
-                                    fadeIn(animationSpec = tween(220)) +
-                                        slideInVertically(animationSpec = tween(240)) { it / 24 }
+                                    fadeIn(animationSpec = tween(240)) +
+                                        scaleIn(initialScale = 0.965f, animationSpec = tween(240)) +
+                                        slideInVertically(animationSpec = tween(250)) { it / 28 }
                                 },
-                                exitTransition = { fadeOut(animationSpec = tween(160)) },
-                                popEnterTransition = { fadeIn(animationSpec = tween(200)) },
-                                popExitTransition = { fadeOut(animationSpec = tween(150)) }
+                                exitTransition = {
+                                    fadeOut(animationSpec = tween(160)) +
+                                        scaleOut(targetScale = 0.985f, animationSpec = tween(160))
+                                },
+                                popEnterTransition = {
+                                    fadeIn(animationSpec = tween(220)) +
+                                        scaleIn(initialScale = 0.975f, animationSpec = tween(220))
+                                },
+                                popExitTransition = {
+                                    fadeOut(animationSpec = tween(150))
+                                }
                             ) {
                                 composable<AppRoute.Overview> {
                                     OverviewScreen(
@@ -1051,7 +1075,16 @@ private fun V103EmeraldHeaderBanner(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
-                            BmwPrecisionBadge(label = activeSection)
+                            AnimatedContent(
+                                targetState = activeSection,
+                                transitionSpec = {
+                                    (fadeIn(tween(180)) + scaleIn(initialScale = 0.92f, animationSpec = tween(180)))
+                                        .togetherWith(fadeOut(tween(120)))
+                                },
+                                label = "header_section_badge"
+                            ) { sectionLabel ->
+                                BmwPrecisionBadge(label = sectionLabel)
+                            }
                         }
                     }
                 }
@@ -1090,7 +1123,7 @@ private fun V103EmeraldHeaderBanner(
                 }
             }
 
-            BmwPrecisionStripe(height = 2.dp)
+            AnimatedBmwPrecisionStripe(height = 2.dp)
 
             // Live Ticker & Status Capsules
             Row(
@@ -1109,11 +1142,9 @@ private fun V103EmeraldHeaderBanner(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(if (isSyncing) Color(0xFFFDE047) else Color(0xFF4ADE80))
+                        PulsingLiveDot(
+                            color = if (isSyncing) Color(0xFFFDE047) else Color(0xFF4ADE80),
+                            size = 6.dp
                         )
                         Text(
                             text = if (isSyncing) "Syncing…" else cloudStatus,
@@ -1244,6 +1275,15 @@ private fun V103FloatingBottomBar(
                     } else {
                         item.label
                     }
+                    val iconSizeDp = if (isWideLayout) 39.dp else 34.dp
+                    val indicatorWidth by animateDpAsState(
+                        targetValue = if (selected) 18.dp else 0.dp,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        ),
+                        label = "nav_indicator_width"
+                    )
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -1255,20 +1295,44 @@ private fun V103FloatingBottomBar(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        if (item.route == AppRoute.Calculator) {
-                            PremiumCalculatorIcon(
-                                size = if (isWideLayout) 38.dp else 33.dp,
+                        when (item.route) {
+                            AppRoute.Overview -> PremiumHomeIcon(
+                                size = iconSizeDp,
+                                active = selected,
+                                primaryColor = primaryColor
+                            )
+                            AppRoute.Customers -> PremiumUserIcon(
+                                size = iconSizeDp,
                                 active = selected
                             )
-                        } else {
-                            AnimatedIosNavBadge(
+                            AppRoute.NewBill -> PremiumBillIcon(
+                                size = iconSizeDp,
+                                active = selected
+                            )
+                            AppRoute.Payments -> PremiumPayIcon(
+                                size = iconSizeDp,
+                                active = selected
+                            )
+                            AppRoute.History -> PremiumHistoryIcon(
+                                size = iconSizeDp,
+                                active = selected
+                            )
+                            AppRoute.Calculator -> PremiumCalculatorIcon(
+                                size = iconSizeDp,
+                                active = selected
+                            )
+                            AppRoute.Settings -> PremiumSettingsIcon(
+                                size = iconSizeDp,
+                                active = selected
+                            )
+                            else -> AnimatedIosNavBadge(
                                 icon = item.icon,
                                 contentDescription = item.label,
                                 selected = selected,
                                 activeColor = activeAccent,
                                 inactiveBg = MaterialTheme.colorScheme.surfaceVariant,
                                 inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                size = if (isWideLayout) 38.dp else 33.dp,
+                                size = iconSizeDp,
                                 iconSize = if (isWideLayout) 20.dp else 18.dp
                             )
                         }
@@ -1282,6 +1346,13 @@ private fun V103FloatingBottomBar(
                             overflow = TextOverflow.Ellipsis,
                             color = labelColor,
                             fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(indicatorWidth)
+                                .height(2.5.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(activeAccent)
                         )
                     }
                 }

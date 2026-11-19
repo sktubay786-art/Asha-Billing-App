@@ -65,9 +65,13 @@ import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
 import com.example.data.model.todayIsoDate
+import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.PremiumPayIcon
 import com.example.ui.components.PrintSizePickerDialog
+import com.example.ui.components.StaggeredPremiumReveal
+import com.example.ui.theme.BmwTelemetryStyle
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
 import com.example.ui.theme.CrimsonDue
@@ -198,12 +202,31 @@ fun PaymentsScreen(
 
         if (selectedTab == 0) {
             item {
+                StaggeredPremiumReveal(index = 0) {
                 AshaPanelCard {
-                    Text(
-                        text = "Pay / Receive Due / Settle",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
+                    AnimatedBmwPrecisionStripe(
+                        height = 2.5.dp,
+                        modifier = Modifier.padding(bottom = 10.dp)
                     )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(11.dp)
+                    ) {
+                        PremiumPayIcon(size = 42.dp, active = true)
+                        Column {
+                            Text(
+                                text = "PAYMENT SETTLEMENT",
+                                style = BmwTelemetryStyle,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Pay / Receive Due / Settle",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
@@ -573,6 +596,7 @@ fun PaymentsScreen(
                             )
                         }
                     }
+                }
                 }
             }
         } else {

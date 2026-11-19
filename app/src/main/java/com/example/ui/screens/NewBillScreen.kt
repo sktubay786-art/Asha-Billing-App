@@ -94,11 +94,13 @@ import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.example.notifications.BillDueReminder
 import com.example.notifications.DueReminderScheduler
+import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BarcodeScannerDialog
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.components.IosWhatsAppBillIcon
+import com.example.ui.components.PremiumBillIcon
 import com.example.ui.components.PrintSizePickerDialog
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldPrimary
@@ -592,6 +594,10 @@ fun NewBillScreen(
     ) {
         item {
             AshaPanelCard {
+                AnimatedBmwPrecisionStripe(
+                    height = 2.5.dp,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -601,16 +607,15 @@ fun NewBillScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        IosSquircleIcon(
-                            icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            size = 36.dp,
-                            iconSize = 19.dp
+                        PremiumBillIcon(
+                            size = 42.dp,
+                            active = true
                         )
                         Column {
                             Text(
                                 text = "New Bill",
                                 style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(

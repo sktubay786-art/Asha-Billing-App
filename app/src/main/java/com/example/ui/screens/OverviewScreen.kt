@@ -8,6 +8,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +63,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -74,11 +77,20 @@ import com.example.R
 import com.example.data.model.BillingDashboardData
 import com.example.data.model.Customer
 import com.example.data.model.formatInr
+import com.example.ui.components.AnimatedBmwPrecisionStripe
+import com.example.ui.components.AnimatedCurrencyText
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BillRowItem
 import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
+import com.example.ui.components.PremiumBillIcon
 import com.example.ui.components.PremiumCalculatorIcon
+import com.example.ui.components.PremiumElectricIcon
+import com.example.ui.components.PremiumHistoryIcon
+import com.example.ui.components.PremiumPayIcon
+import com.example.ui.components.PremiumUserIcon
+import com.example.ui.components.PulsingLiveDot
+import com.example.ui.components.StaggeredPremiumReveal
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
 import com.example.ui.theme.BmwMetricNumberStyle
@@ -208,8 +220,9 @@ fun OverviewScreen(
     ) {
         // V103 Top Dashboard Header + Filters + Collection Bar Card
         item {
+            StaggeredPremiumReveal(index = 0) {
             AshaPanelCard {
-                BmwPrecisionStripe(
+                AnimatedBmwPrecisionStripe(
                     height = 2.5.dp,
                     modifier = Modifier.padding(bottom = 10.dp)
                 )
@@ -271,12 +284,7 @@ fun OverviewScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(PaidBadgeFg)
-                                )
+                                PulsingLiveDot(color = PaidBadgeFg, size = 7.dp)
                                 Text(
                                     text = "Live",
                                     style = MaterialTheme.typography.labelMedium,
@@ -413,18 +421,20 @@ fun OverviewScreen(
                     }
                 }
             }
+            }
         }
 
         // V103 2x2 KPI Cards
         item {
+            StaggeredPremiumReveal(index = 1) {
             if (isWideLayout) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-                    V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f))
-                    V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f))
+                    V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
+                    V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
+                    V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
                     V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
                 }
             } else {
@@ -433,17 +443,18 @@ fun OverviewScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-                        V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f))
+                        V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
+                        V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f))
+                        V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
                         V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
                     }
                 }
+            }
             }
         }
 
@@ -561,8 +572,9 @@ fun OverviewScreen(
             }
         }
 
-        // iOS 2-Column Action Grid
+        // iOS 2-Column Action Grid with bespoke crafted icons
         item {
+            StaggeredPremiumReveal(index = 2) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -570,9 +582,10 @@ fun OverviewScreen(
                 ) {
                     V103ActionTile(
                         icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                        badgeColor = Color(0xFF0B6B50),
+                        badgeColor = Color(0xFF5856D6),
                         title = "New Bill",
                         subtitle = "Create invoice",
+                        customLeading = { PremiumBillIcon(size = 40.dp, active = true) },
                         onClick = onCreateBill,
                         modifier = Modifier
                             .weight(1f)
@@ -583,6 +596,7 @@ fun OverviewScreen(
                         badgeColor = Color(0xFF007AFF),
                         title = "Customers",
                         subtitle = "Ledger chat",
+                        customLeading = { PremiumUserIcon(size = 40.dp, active = true) },
                         onClick = onOpenUsers,
                         modifier = Modifier
                             .weight(1f)
@@ -595,9 +609,10 @@ fun OverviewScreen(
                 ) {
                     V103ActionTile(
                         icon = Icons.Rounded.CurrencyRupee,
-                        badgeColor = Color(0xFF34C759),
+                        badgeColor = Color(0xFF16A34A),
                         title = "Pay / Settle",
                         subtitle = "Receive payment",
+                        customLeading = { PremiumPayIcon(size = 40.dp, active = true) },
                         onClick = onReceivePayment,
                         modifier = Modifier
                             .weight(1f)
@@ -605,9 +620,10 @@ fun OverviewScreen(
                     )
                     V103ActionTile(
                         icon = Icons.Rounded.BarChart,
-                        badgeColor = Color(0xFF5856D6),
+                        badgeColor = Color(0xFF9333EA),
                         title = "History",
                         subtitle = "Bills & dues",
+                        customLeading = { PremiumHistoryIcon(size = 40.dp, active = true) },
                         onClick = onViewHistory,
                         modifier = Modifier
                             .weight(1f)
@@ -650,8 +666,9 @@ fun OverviewScreen(
                         subtitle = if (data.wbsedclConsumers.isNotEmpty()) {
                             "WBSEDCL · ${data.wbsedclConsumers.size} IDs"
                         } else {
-                            "WBSEDCL Quick Pay"
+                            "WBSEDCL Auto-Pay"
                         },
+                        customLeading = { PremiumElectricIcon(size = 40.dp, active = true) },
                         onClick = onOpenWbsedcl,
                         modifier = Modifier
                             .weight(1f)
@@ -662,13 +679,14 @@ fun OverviewScreen(
                         badgeColor = Color(0xFFFF9500),
                         title = "ASHA Calculator",
                         subtitle = "Land & Rate math",
-                        customLeading = { PremiumCalculatorIcon(size = 38.dp, active = true) },
+                        customLeading = { PremiumCalculatorIcon(size = 40.dp, active = true) },
                         onClick = onOpenCalculator,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("quick_calculator_button")
                     )
                 }
+            }
             }
         }
 
@@ -911,14 +929,15 @@ private fun V103KpiCard(
     label: String,
     value: String,
     valueColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    currencyAmount: Double? = null
 ) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 2.dp
+        shadowElevation = 3.dp
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
@@ -936,13 +955,21 @@ private fun V103KpiCard(
                 style = BmwTelemetryStyle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                text = value,
-                style = BmwMetricNumberStyle,
-                color = valueColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (currencyAmount != null) {
+                AnimatedCurrencyText(
+                    amount = currencyAmount,
+                    style = BmwMetricNumberStyle,
+                    color = valueColor
+                )
+            } else {
+                Text(
+                    text = value,
+                    style = BmwMetricNumberStyle,
+                    color = valueColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -991,19 +1018,33 @@ private fun V103ActionTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "action_tile_press_scale"
+    )
+
     Surface(
         onClick = onClick,
-        modifier = modifier.height(104.dp),
-        shape = RoundedCornerShape(18.dp),
+        interactionSource = interactionSource,
+        modifier = modifier
+            .scale(pressScale)
+            .height(106.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 1.dp
+        shadowElevation = if (isPressed) 1.dp else 3.dp
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Canvas(modifier = Modifier.matchParentSize()) {
                 drawCircle(
-                    color = badgeColor.copy(alpha = 0.08f),
-                    radius = 40.dp.toPx(),
+                    color = badgeColor.copy(alpha = 0.09f),
+                    radius = 44.dp.toPx(),
                     center = Offset(size.width, 0f)
                 )
             }
@@ -1019,8 +1060,8 @@ private fun V103ActionTile(
                     IosSquircleIcon(
                         icon = icon,
                         containerColor = badgeColor,
-                        size = 38.dp,
-                        iconSize = 20.dp
+                        size = 40.dp,
+                        iconSize = 21.dp
                     )
                 }
                 Column {
