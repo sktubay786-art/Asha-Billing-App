@@ -95,6 +95,7 @@ import com.example.data.model.Customer
 import com.example.data.model.LandUnit
 import com.example.data.model.PaymentMode
 import com.example.data.model.calculateBigha
+import com.example.data.model.findCustomerByScannedCode
 import com.example.data.model.formatInr
 import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
@@ -422,11 +423,13 @@ fun NewBillScreen(
         val raw = rawCode.trim()
         if (raw.isEmpty()) return
 
-        // 0. Direct exact match against Customer ID (compact 1D Code 128 Barcode on bills & passes)
-        val exactIdMatch = data.customers.firstOrNull { it.id.equals(raw, ignoreCase = false) }
-        if (exactIdMatch != null) {
-            selectCustomerAndPrefill(exactIdMatch)
-            Toast.makeText(context, "Customer loaded: ${exactIdMatch.name}", Toast.LENGTH_SHORT).show()
+        // 0. Unified match against compact 8-digit Customer Barcode ID, full Firestore ID, ASHA_CUST, phone, or Bill No
+        val directMatch = if (!raw.startsWith("{")) {
+            data.findCustomerByScannedCode(raw)
+        } else null
+        if (directMatch != null) {
+            selectCustomerAndPrefill(directMatch)
+            Toast.makeText(context, "Customer loaded: ${directMatch.name}", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -620,6 +623,7 @@ fun NewBillScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -627,21 +631,27 @@ fun NewBillScreen(
                             size = 42.dp,
                             active = true
                         )
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "New Bill",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "$effectiveBillNo · $billDate",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Surface(
                         onClick = { showBarcodeScanner = true },
@@ -667,7 +677,9 @@ fun NewBillScreen(
                                 text = "Scan ID",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

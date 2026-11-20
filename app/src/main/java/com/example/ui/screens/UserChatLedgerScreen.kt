@@ -91,6 +91,8 @@ import com.example.ui.components.IosWhatsAppBillIcon
 import com.example.ui.components.PrintSizePickerDialog
 import com.example.ui.components.QuickReceivePaymentDialog
 import com.example.ui.components.StatusBadge
+import com.example.ui.theme.AmberBadgeBg
+import com.example.ui.theme.AmberBadgeFg
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldDeep
 import com.example.ui.theme.EmeraldPrimary
@@ -188,11 +190,21 @@ fun UserChatLedgerScreen(
     val customerMessages = remember(data.chatMessages, customer.id) {
         data.chatMessagesForCustomer(customer.id)
     }
-    val totalBilled = remember(customerBills, customer.openingDue) {
-        customerBills.sumOf { it.current } + customer.openingDue
+    val openingSettled = remember(customerPayments) {
+        customerPayments.filter { it.billId == "opening_due" }.sumOf { it.amount }
+    }
+    val totalBilled = remember(customerBills, customer.openingDue, openingSettled) {
+        customerBills.sumOf { it.allTotal } + customer.openingDue + openingSettled
     }
     val totalPaid = remember(customerPayments) {
-        customerPayments.sumOf { it.amount }
+        customerPayments
+            .filter { PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
+            .sumOf { it.amount }
+    }
+    val totalSettled = remember(customerPayments) {
+        customerPayments
+            .filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+            .sumOf { it.amount }
     }
     val billMap = remember(data.bills) { data.bills.associateBy { it.id } }
 
@@ -241,7 +253,10 @@ fun UserChatLedgerScreen(
             val landMeta = customer.landSummaryLabel()
             if (landMeta.isNotBlank()) appendLine("Land: $landMeta")
             appendLine("Total Billed: ${formatInr(totalBilled)}")
-            appendLine("Total Paid: ${formatInr(totalPaid)}")
+            appendLine("Total Paid (Cash/UPI): ${formatInr(totalPaid)}")
+            if (totalSettled > 0.001) {
+                appendLine("Total Settled / Waived: ${formatInr(totalSettled)}")
+            }
             appendLine("Balance Due: ${formatInr(max(0.0, customerDue))}")
             if (data.settings.upi.isNotBlank()) appendLine("UPI: ${data.settings.upi}")
         }
@@ -263,7 +278,10 @@ fun UserChatLedgerScreen(
         val payments = data.payments
             .filter { it.customerId == customer.id }
             .map { p ->
-                val billNo = billMap[p.billId]?.billNo ?: "Ledger"
+                val billNo = when {
+                    p.billId == "opening_due" -> "Opening Due"
+                    else -> billMap[p.billId]?.billNo ?: "Ledger"
+                }
                 ChatLedgerItem.PaymentEntry(p, billNo)
             }
         val notes = customerMessages.map { ChatLedgerItem.NoteEntry(it) }
@@ -450,15 +468,23 @@ fun UserChatLedgerScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
                                 ChatStatPill("Billed", formatInr(totalBilled), Color.White)
                                 ChatStatPill("Paid", formatInr(totalPaid), Color(0xFF86EFAC))
+                                if (totalSettled > 0.001) {
+                                    ChatStatPill("Settled", formatInr(totalSettled), Color(0xFFFDE68A))
+                                }
                                 ChatStatPill(
                                     "Due",
                                     if (customerDue > 0.001) formatInr(customerDue) else "Cleared",
                                     if (customerDue > 0.001) Color(0xFFFCA5A5) else Color(0xFF86EFAC)
                                 )
                             }
+
+                            Spacer(modifier = Modifier.width(6.dp))
 
                             Surface(
                                 onClick = { shareLedgerStatement() },
@@ -471,6 +497,8 @@ fun UserChatLedgerScreen(
                                     fontSize = 11.sp,
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false,
                                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
                                 )
                             }
@@ -899,6 +927,8 @@ private fun BillChatBubble(
     onDeleteBill: ((Bill) -> Unit)? = null
 ) {
     val due = data.dueForBill(bill)
+    val cashPaid = data.cashCollectedForBill(bill.id)
+    val settled = data.settledForBill(bill.id)
     val status = data.statusForBill(bill)
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -1019,16 +1049,33 @@ private fun BillChatBubble(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val statusLine = when {
+                        due > 0.001 && settled > 0.001 -> "Due ${formatInr(due)} · Set ${formatInr(settled)}"
+                        due > 0.001 -> "Due ${formatInr(due)}"
+                        settled > 0.001 -> "Paid ${formatInr(cashPaid)} · Set ${formatInr(settled)}"
+                        else -> "Paid in full"
+                    }
+                    val statusColor = when {
+                        due > 0.001 -> CrimsonDue
+                        settled > 0.001 -> AmberBadgeFg
+                        else -> PaidBadgeFg
+                    }
                     Text(
-                        text = if (due > 0.001) "Due ${formatInr(due)}" else "Paid in full",
+                        text = statusLine,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (due > 0.001) CrimsonDue else PaidBadgeFg,
-                        fontWeight = FontWeight.Bold
+                        color = statusColor,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "${bill.date} · Pass →",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -1045,8 +1092,24 @@ private fun PaymentChatBubble(
     onEditPayment: ((Payment) -> Unit)? = null,
     onDeletePayment: ((Payment) -> Unit)? = null
 ) {
-    val textColor = if (isDark) Color.White else Color(0xFF111B21)
-    val subColor = if (isDark) Color(0xFFB3D5CC) else Color(0xFF4B6358)
+    val isSettlement = PaymentMode.fromLabel(payment.mode) == PaymentMode.SETTLEMENT
+    val resolvedBubbleColor = if (isSettlement) {
+        if (isDark) Color(0xFF3E2C0A) else Color(0xFFFEF3C7)
+    } else {
+        bubbleColor
+    }
+    val textColor = when {
+        isSettlement && isDark -> Color(0xFFFDE68A)
+        isSettlement -> Color(0xFF78350F)
+        isDark -> Color.White
+        else -> Color(0xFF111B21)
+    }
+    val subColor = when {
+        isSettlement && isDark -> Color(0xFFFCD34D).copy(alpha = 0.85f)
+        isSettlement -> Color(0xFF92400E)
+        isDark -> Color(0xFFB3D5CC)
+        else -> Color(0xFF4B6358)
+    }
     var menuExpanded by remember { mutableStateOf(false) }
 
     Box(
@@ -1056,7 +1119,8 @@ private fun PaymentChatBubble(
         Surface(
             modifier = Modifier.widthIn(max = 300.dp),
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
-            color = bubbleColor,
+            color = resolvedBubbleColor,
+            border = if (isSettlement) BorderStroke(0.75.dp, AmberBadgeFg.copy(alpha = 0.45f)) else null,
             shadowElevation = 1.dp
         ) {
             Column(
@@ -1070,22 +1134,36 @@ private fun PaymentChatBubble(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
+                        if (isSettlement) {
+                            Icon(
+                                imageVector = Icons.Rounded.Handshake,
+                                contentDescription = "Settlement",
+                                tint = textColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                         Text(
-                            text = "+ ${formatInr(payment.amount)}",
+                            text = if (isSettlement) "Settled ${formatInr(payment.amount)}" else "+ ${formatInr(payment.amount)}",
                             style = MaterialTheme.typography.titleMedium,
                             color = textColor,
-                            fontWeight = FontWeight.ExtraBold
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color.Black.copy(alpha = 0.08f)
+                            color = if (isSettlement) AmberBadgeBg.copy(alpha = if (isDark) 0.25f else 0.9f) else Color.Black.copy(alpha = 0.08f)
                         ) {
                             Text(
-                                text = payment.mode,
+                                text = if (isSettlement) "Discount / Waiver" else payment.mode,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = textColor,
+                                color = if (isSettlement && !isDark) AmberBadgeFg else textColor,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -1164,7 +1242,7 @@ private fun PaymentChatBubble(
                     Icon(
                         imageVector = Icons.Rounded.DoneAll,
                         contentDescription = null,
-                        tint = if (isDark) Color(0xFF53BDEB) else Color(0xFF007B68),
+                        tint = if (isSettlement) AmberBadgeFg else if (isDark) Color(0xFF53BDEB) else Color(0xFF007B68),
                         modifier = Modifier.size(14.dp)
                     )
                 }

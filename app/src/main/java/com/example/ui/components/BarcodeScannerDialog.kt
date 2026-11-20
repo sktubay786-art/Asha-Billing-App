@@ -2,9 +2,12 @@ package com.example.ui.components
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.mlkit.vision.MlKitAnalyzer
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
@@ -54,15 +57,20 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +82,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.model.Customer
+import com.example.data.model.compactCustomerBarcodeId
 import com.example.ui.theme.EmeraldMint
 import com.example.ui.theme.EmeraldPrimary
 import com.example.util.BillDocumentEngine
@@ -92,6 +101,7 @@ fun BarcodeScannerDialog(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptics = LocalAshaHaptics.current
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -103,6 +113,7 @@ fun BarcodeScannerDialog(
     var hasHandledScan by remember { mutableStateOf(false) }
     var showManualCodeEntry by remember { mutableStateOf(false) }
     var manualCodeText by remember { mutableStateOf("") }
+    var scannerStatusHint by remember { mutableStateOf<String?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -129,6 +140,15 @@ fun BarcodeScannerDialog(
                     val cameraController = remember(context) {
                         LifecycleCameraController(context).apply {
                             cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                            // High-resolution analysis frames make 1D Code 128 barcodes lock far faster
+                            imageAnalysisResolutionSelector = ResolutionSelector.Builder()
+                                .setResolutionStrategy(
+                                    ResolutionStrategy(
+                                        Size(1280, 720),
+                                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                                    )
+                                )
+                                .build()
                         }
                     }
 
@@ -140,8 +160,7 @@ fun BarcodeScannerDialog(
                                 Barcode.FORMAT_CODE_39,
                                 Barcode.FORMAT_EAN_13,
                                 Barcode.FORMAT_EAN_8,
-                                Barcode.FORMAT_UPC_A,
-                                Barcode.FORMAT_ALL_FORMATS
+                                Barcode.FORMAT_UPC_A
                             )
                             .build()
                         BarcodeScanning.getClient(options)
@@ -158,10 +177,25 @@ fun BarcodeScannerDialog(
                             ) { result ->
                                 if (hasHandledScan) return@MlKitAnalyzer
                                 val barcodes = result?.getValue(barcodeScanner).orEmpty()
-                                val raw = barcodes.firstNotNullOfOrNull { it.rawValue?.trim() }
+                                if (barcodes.isEmpty()) return@MlKitAnalyzer
+
+                                // Prioritize 1D Customer Barcodes and skip UPI Payment QRs so scanning a bill
+                                // doesn't accidentally abort on the bottom "upi://pay" QR code!
+                                val customerCandidates = barcodes.filter { b ->
+                                    val v = b.rawValue?.trim().orEmpty()
+                                    v.isNotBlank() && !v.startsWith("upi://", ignoreCase = true)
+                                }
+                                val preferred = customerCandidates.firstOrNull { it.format == Barcode.FORMAT_CODE_128 }
+                                    ?: customerCandidates.firstOrNull()
+
+                                val raw = preferred?.rawValue?.trim()
                                 if (!raw.isNullOrBlank()) {
                                     hasHandledScan = true
+                                    scannerStatusHint = null
+                                    haptics.confirm()
                                     onBarcodeScanned(raw)
+                                } else if (barcodes.any { it.rawValue?.trim()?.startsWith("upi://", ignoreCase = true) == true }) {
+                                    scannerStatusHint = "UPI Payment QR ignored — aim at the Customer Barcode near top of bill"
                                 }
                             }
                         )
@@ -180,6 +214,7 @@ fun BarcodeScannerDialog(
                     AndroidView(
                         factory = { ctx ->
                             PreviewView(ctx).apply {
+                                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                                 scaleType = PreviewView.ScaleType.FILL_CENTER
                                 controller = cameraController
                             }
@@ -316,6 +351,23 @@ fun BarcodeScannerDialog(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        if (!scannerStatusHint.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFFF59E0B).copy(alpha = 0.22f),
+                                border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.55f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = scannerStatusHint!!,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color(0xFFFDE68A),
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -323,13 +375,13 @@ fun BarcodeScannerDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Point camera at 1D Barcode or QR",
+                                    text = "Point camera at Customer Barcode or QR",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Scans Customer ID Barcodes (Code 128), QR & Phone codes",
+                                    text = "Reads compact CID Barcodes (Code 128), QR & Phone codes",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.White.copy(alpha = 0.72f)
                                 )
@@ -458,9 +510,11 @@ fun CustomerQrPassDialog(
     customer: Customer,
     onDismiss: () -> Unit
 ) {
-    val barcodeContent = remember(customer.id) { customer.id.trim() }
-    val barcodeBitmap = remember(barcodeContent) {
-        BillDocumentEngine.generateCode128BarcodeBitmap(barcodeContent, widthPx = 640, heightPx = 140)
+    val compactId = remember(customer.id) { compactCustomerBarcodeId(customer.id) }
+    val barcodeBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, compactId) {
+        value = withContext(Dispatchers.Default) {
+            BillDocumentEngine.generateCode128BarcodeBitmap(compactId, widthPx = 540, heightPx = 140)
+        }
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -498,7 +552,7 @@ fun CustomerQrPassDialog(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Code 128 · Fast Scan",
+                                text = "Compact Code 128 · Fast Scan",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -509,7 +563,7 @@ fun CustomerQrPassDialog(
                     }
                 }
 
-                if (barcodeBitmap != null) {
+                barcodeBitmap?.let { bmp ->
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = Color.White,
@@ -524,17 +578,19 @@ fun CustomerQrPassDialog(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Image(
-                                bitmap = barcodeBitmap.asImageBitmap(),
+                                bitmap = bmp.asImageBitmap(),
                                 contentDescription = "Code 128 barcode for ${customer.name}",
+                                contentScale = ContentScale.Fit,
+                                filterQuality = FilterQuality.None,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(78.dp)
                             )
                             Text(
-                                text = "ID: $barcodeContent",
-                                style = MaterialTheme.typography.labelMedium,
+                                text = "CID-$compactId",
+                                style = MaterialTheme.typography.titleSmall,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.ExtraBold,
                                 color = Color(0xFF0F172A)
                             )
                         }

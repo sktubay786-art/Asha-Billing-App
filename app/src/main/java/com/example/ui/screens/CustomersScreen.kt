@@ -74,6 +74,7 @@ import com.example.data.model.BillingDashboardData
 import com.example.data.model.Customer
 import com.example.data.model.LandUnit
 import com.example.data.model.customerInitials
+import com.example.data.model.findCustomerByScannedCode
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BarcodeScannerDialog
@@ -131,23 +132,7 @@ fun CustomersScreen(
     fun handleScannedCustomerCode(rawCode: String) {
         val raw = rawCode.trim()
         if (raw.isEmpty()) return
-        val strippedId = if (raw.startsWith("ASHA_CUST:", ignoreCase = true)) {
-            raw.substringAfter(":").trim()
-        } else {
-            raw
-        }
-        val digits10 = raw.filter { it.isDigit() }.let { if (it.length >= 10) it.takeLast(10) else "" }
-        val matched = data.customers.firstOrNull { it.id == strippedId }
-            ?: data.customers.firstOrNull { it.id.equals(raw, ignoreCase = true) }
-            ?: (if (digits10.isNotBlank()) {
-                data.customers.firstOrNull {
-                    val p = it.phone.filter { ch -> ch.isDigit() }
-                    p.length >= 10 && p.takeLast(10) == digits10
-                }
-            } else null)
-            ?: data.bills.firstOrNull { it.billNo.equals(raw, ignoreCase = true) }?.let { bill ->
-                data.customers.firstOrNull { it.id == bill.customerId }
-            }
+        val matched = data.findCustomerByScannedCode(raw)
         if (matched != null) {
             onOpenCustomerChat(matched)
         } else {

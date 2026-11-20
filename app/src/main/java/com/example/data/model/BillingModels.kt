@@ -437,6 +437,22 @@ data class BillingDashboardData(
     private val paidByBill: Map<String, Double> by lazy {
         paymentsByBill.mapValues { (_, list) -> roundMoney(list.sumOf { it.amount }) }
     }
+    private val cashCollectedByBill: Map<String, Double> by lazy {
+        paymentsByBill.mapValues { (_, list) ->
+            roundMoney(
+                list.filter { PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
+                    .sumOf { it.amount }
+            )
+        }
+    }
+    private val settledByBill: Map<String, Double> by lazy {
+        paymentsByBill.mapValues { (_, list) ->
+            roundMoney(
+                list.filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+                    .sumOf { it.amount }
+            )
+        }
+    }
     private val billsByCustomer: Map<String, List<Bill>> by lazy {
         bills.groupBy { it.customerId }
     }
@@ -461,8 +477,17 @@ data class BillingDashboardData(
     fun paymentsForBill(billId: String): List<Payment> =
         paymentsByBill[billId].orEmpty().sortedBy { it.date }
 
+    /** Total credited against a bill (real payments + settlement waivers) for calculating remaining due & PAID status. */
     fun paidForBill(billId: String): Double =
         paidByBill[billId] ?: 0.0
+
+    /** Real received money for a bill (Cash, UPI, Bank, Other — excludes Settlement waivers). */
+    fun cashCollectedForBill(billId: String): Double =
+        cashCollectedByBill[billId] ?: 0.0
+
+    /** Waived / settled adjustment amount for a bill (PaymentMode.SETTLEMENT only). */
+    fun settledForBill(billId: String): Double =
+        settledByBill[billId] ?: 0.0
 
     fun dueForBill(bill: Bill): Double =
         roundMoney(max(0.0, bill.allTotal - paidForBill(bill.id)))
@@ -488,13 +513,22 @@ data class BillingDashboardData(
     }
 
     val totalBilled: Double by lazy {
-        roundMoney(bills.sumOf { it.allTotal })
+        val openingSettled = payments
+            .filter { it.billId == "opening_due" }
+            .sumOf { it.amount }
+        roundMoney(bills.sumOf { it.allTotal } + customers.sumOf { it.openingDue } + openingSettled)
     }
 
+    /** Real money collected across Cash / UPI / Bank / Other — strictly excludes Settlement waivers. */
     val totalCollected: Double by lazy {
-        roundMoney(bills.sumOf { paidForBill(it.id) })
+        roundMoney(
+            payments
+                .filter { PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
+                .sumOf { it.amount }
+        )
     }
 
+    /** Total settlement waivers / adjustments — tracked separately from Collected. */
     val totalSettled: Double by lazy {
         roundMoney(
             payments
@@ -601,3 +635,62 @@ fun customerInitials(name: String): String {
     if (parts.isEmpty()) return "?"
     return parts.take(2).joinToString("") { it.first().uppercaseChar().toString() }
 }
+
+/**
+ * Derives a compact, deterministic 8-digit Customer Barcode ID (10000000..99999999) from any
+ * Firestore customer document ID.
+ *
+ * Pure 8-digit codes allow ZXing Code128Writer to automatically switch to Code 128C double-density
+ * mode (79 modules instead of 255+ modules for a 20-char mixed-case Firestore ID), making bars >3x
+ * wider and instantly scannable on A4-1/4 bills, thermal receipts, and phone screens.
+ */
+fun compactCustomerBarcodeId(rawCustomerId: String): String {
+    val clean = rawCustomerId.trim()
+    if (clean.isBlank() || clean == "preview") return ""
+    if (clean.length == 8 && clean.all { it.isDigit() }) return clean
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(clean.toByteArray(Charsets.UTF_8))
+    val unsigned32 = ((digest[0].toLong() and 0xFFL) shl 24) or
+        ((digest[1].toLong() and 0xFFL) shl 16) or
+        ((digest[2].toLong() and 0xFFL) shl 8) or
+        (digest[3].toLong() and 0xFFL)
+    val code = 10_000_000L + (unsigned32 % 90_000_000L)
+    return code.toString()
+}
+
+/**
+ * Unified resolver matching any scanned 1D Barcode or QR payload (compact 8-digit Code 128C ID,
+ * CID-prefixed code, full Firestore ID, ASHA_CUST:<id>, phone number, or bill number) to a [Customer].
+ */
+fun BillingDashboardData.findCustomerByScannedCode(rawCode: String): Customer? {
+    val raw = rawCode.trim()
+    if (raw.isEmpty()) return null
+    val normalized = when {
+        raw.startsWith("ASHA_CUST:", ignoreCase = true) -> raw.substringAfter(":").trim()
+        raw.startsWith("CID-", ignoreCase = true) -> raw.substringAfter("-").trim()
+        raw.startsWith("CID:", ignoreCase = true) -> raw.substringAfter(":").trim()
+        raw.startsWith("ID:", ignoreCase = true) -> raw.substringAfter(":").trim()
+        else -> raw
+    }
+    val digitsOnly = normalized.filter { it.isDigit() }
+    val phoneLast10 = if (digitsOnly.length >= 10) digitsOnly.takeLast(10) else ""
+
+    return customers.firstOrNull { it.id == normalized }
+        ?: customers.firstOrNull { it.id.equals(normalized, ignoreCase = true) }
+        ?: (if (digitsOnly.length == 8) {
+            customers.firstOrNull { compactCustomerBarcodeId(it.id) == digitsOnly }
+        } else null)
+        ?: (if (normalized.length >= 6) {
+            customers.firstOrNull { it.id.startsWith(normalized, ignoreCase = true) }
+        } else null)
+        ?: (if (phoneLast10.isNotBlank()) {
+            customers.firstOrNull {
+                val p = it.phone.filter { ch -> ch.isDigit() }
+                p.length >= 10 && p.takeLast(10) == phoneLast10
+            }
+        } else null)
+        ?: bills.firstOrNull { it.billNo.equals(normalized, ignoreCase = true) }?.let { bill ->
+            customers.firstOrNull { it.id == bill.customerId }
+        }
+}
+

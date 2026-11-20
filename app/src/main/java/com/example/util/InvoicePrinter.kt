@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.util.Locale
@@ -177,121 +178,148 @@ object InvoicePrinter {
             return
         }
 
-        val billBitmap = BillDocumentEngine.renderBillBitmap(
-            settings = settings,
-            bill = bill,
-            payments = payments,
-            paid = paid,
-            due = due,
-            design = design,
-            size = printSize,
-            qrMode = qrMode,
-            customQrPath = customQrPath,
-            bengaliLabels = bengaliLabels
-        )
-
-        val safeName = bill.billNo.ifBlank { "Bill" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        val aspectRatio = billBitmap.height.toFloat() / billBitmap.width.coerceAtLeast(1).toFloat()
-        val mediaSize = when (printSize) {
-            BillPrintSize.A4_INVOICE,
-            BillPrintSize.A4_HALF,
-            BillPrintSize.A4_QUARTER,
-            BillPrintSize.A4_FOUR_UP -> PrintAttributes.MediaSize.ISO_A4
-            BillPrintSize.COMPACT_A6 -> PrintAttributes.MediaSize.ISO_A6
-            BillPrintSize.THERMAL_80 -> {
-                val widthMils = 3150 // ~80mm
-                val heightMils = (widthMils * aspectRatio).roundToInt().coerceIn(2200, 14000)
-                PrintAttributes.MediaSize("ASHA_80MM", "Thermal 80mm", widthMils, heightMils)
-            }
-            BillPrintSize.THERMAL_58 -> {
-                val widthMils = 2283 // ~58mm
-                val heightMils = (widthMils * aspectRatio).roundToInt().coerceIn(2000, 14000)
-                PrintAttributes.MediaSize("ASHA_58MM", "Thermal 58mm", widthMils, heightMils)
-            }
-        }
-
-        val attributes = PrintAttributes.Builder()
-            .setMediaSize(mediaSize)
-            .setColorMode(
-                if (design == BillDesignModel.THERMAL_COMPACT) {
-                    PrintAttributes.COLOR_MODE_MONOCHROME
-                } else {
-                    PrintAttributes.COLOR_MODE_COLOR
-                }
-            )
-            .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
-            .build()
-
-        val adapter = object : PrintDocumentAdapter() {
-            private var currentAttributes: PrintAttributes = attributes
-
-            override fun onLayout(
-                oldAttributes: PrintAttributes?,
-                newAttributes: PrintAttributes,
-                cancellationSignal: CancellationSignal?,
-                callback: LayoutResultCallback,
-                extras: Bundle?
-            ) {
-                if (cancellationSignal?.isCanceled == true) {
-                    callback.onLayoutCancelled()
-                    return
-                }
-                currentAttributes = newAttributes
-                val info = PrintDocumentInfo.Builder("ASHA_$safeName.pdf")
-                    .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                    .setPageCount(1)
-                    .build()
-                callback.onLayoutFinished(info, true)
-            }
-
-            override fun onWrite(
-                pages: Array<out PageRange>?,
-                destination: ParcelFileDescriptor,
-                cancellationSignal: CancellationSignal?,
-                callback: WriteResultCallback
-            ) {
-                if (cancellationSignal?.isCanceled == true) {
-                    callback.onWriteCancelled()
-                    return
-                }
-                val pdfDoc = PrintedPdfDocument(hostContext, currentAttributes)
-                try {
-                    val page = pdfDoc.startPage(0)
-                    val contentRect = page.info.contentRect
-                    val canvas = page.canvas
-                    canvas.save()
-                    canvas.translate(contentRect.left.toFloat(), contentRect.top.toFloat())
-                    BillDocumentEngine.drawBillOnPrintPage(
-                        canvas = canvas,
-                        pageWidth = contentRect.width().coerceAtLeast(1),
-                        pageHeight = contentRect.height().coerceAtLeast(1),
-                        billBitmap = billBitmap,
-                        size = printSize
+        thermalPrintScope.launch {
+            val billBitmap = runCatching {
+                withContext(Dispatchers.Default) {
+                    BillDocumentEngine.renderBillBitmap(
+                        settings = settings,
+                        bill = bill,
+                        payments = payments,
+                        paid = paid,
+                        due = due,
+                        design = design,
+                        size = printSize,
+                        qrMode = qrMode,
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliLabels
                     )
-                    canvas.restore()
-                    pdfDoc.finishPage(page)
+                }
+            }.getOrElse {
+                Toast.makeText(context.applicationContext, "Could not render invoice for print", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
 
+            if (hostContext is Activity && (hostContext.isFinishing || hostContext.isDestroyed)) {
+                return@launch
+            }
+
+            val safeName = bill.billNo.ifBlank { "Bill" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val aspectRatio = billBitmap.height.toFloat() / billBitmap.width.coerceAtLeast(1).toFloat()
+            val mediaSize = when (printSize) {
+                BillPrintSize.A4_INVOICE,
+                BillPrintSize.A4_HALF,
+                BillPrintSize.A4_QUARTER,
+                BillPrintSize.A4_FOUR_UP -> PrintAttributes.MediaSize.ISO_A4
+                BillPrintSize.COMPACT_A6 -> PrintAttributes.MediaSize.ISO_A6
+                BillPrintSize.THERMAL_80 -> {
+                    val widthMils = 3150 // ~80mm
+                    val heightMils = (widthMils * aspectRatio).roundToInt().coerceIn(2200, 14000)
+                    PrintAttributes.MediaSize("ASHA_80MM", "Thermal 80mm", widthMils, heightMils)
+                }
+                BillPrintSize.THERMAL_58 -> {
+                    val widthMils = 2283 // ~58mm
+                    val heightMils = (widthMils * aspectRatio).roundToInt().coerceIn(2000, 14000)
+                    PrintAttributes.MediaSize("ASHA_58MM", "Thermal 58mm", widthMils, heightMils)
+                }
+            }
+
+            val attributes = PrintAttributes.Builder()
+                .setMediaSize(mediaSize)
+                .setColorMode(
+                    if (design == BillDesignModel.THERMAL_COMPACT) {
+                        PrintAttributes.COLOR_MODE_MONOCHROME
+                    } else {
+                        PrintAttributes.COLOR_MODE_COLOR
+                    }
+                )
+                .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
+                .build()
+
+            val adapter = object : PrintDocumentAdapter() {
+                private var currentAttributes: PrintAttributes = attributes
+
+                override fun onLayout(
+                    oldAttributes: PrintAttributes?,
+                    newAttributes: PrintAttributes,
+                    cancellationSignal: CancellationSignal?,
+                    callback: LayoutResultCallback,
+                    extras: Bundle?
+                ) {
+                    if (cancellationSignal?.isCanceled == true) {
+                        callback.onLayoutCancelled()
+                        return
+                    }
+                    currentAttributes = newAttributes
+                    val info = PrintDocumentInfo.Builder("ASHA_$safeName.pdf")
+                        .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                        .setPageCount(1)
+                        .build()
+                    callback.onLayoutFinished(info, true)
+                }
+
+                override fun onWrite(
+                    pages: Array<out PageRange>?,
+                    destination: ParcelFileDescriptor,
+                    cancellationSignal: CancellationSignal?,
+                    callback: WriteResultCallback
+                ) {
                     if (cancellationSignal?.isCanceled == true) {
                         callback.onWriteCancelled()
                         return
                     }
+                    thermalPrintScope.launch {
+                        val writeResult = withContext(Dispatchers.IO) {
+                            val pdfDoc = PrintedPdfDocument(hostContext, currentAttributes)
+                            try {
+                                val page = pdfDoc.startPage(0)
+                                val contentRect = page.info.contentRect
+                                val canvas = page.canvas
+                                canvas.save()
+                                canvas.translate(contentRect.left.toFloat(), contentRect.top.toFloat())
+                                BillDocumentEngine.drawBillOnPrintPage(
+                                    canvas = canvas,
+                                    pageWidth = contentRect.width().coerceAtLeast(1),
+                                    pageHeight = contentRect.height().coerceAtLeast(1),
+                                    billBitmap = billBitmap,
+                                    size = printSize
+                                )
+                                canvas.restore()
+                                pdfDoc.finishPage(page)
 
-                    FileOutputStream(destination.fileDescriptor).use { out ->
-                        pdfDoc.writeTo(out)
+                                if (cancellationSignal?.isCanceled == true) {
+                                    return@withContext Result.failure<Boolean>(IllegalStateException("CANCELLED"))
+                                }
+
+                                FileOutputStream(destination.fileDescriptor).use { out ->
+                                    pdfDoc.writeTo(out)
+                                }
+                                Result.success(true)
+                            } catch (e: Exception) {
+                                Result.failure(e)
+                            } finally {
+                                pdfDoc.close()
+                            }
+                        }
+                        if (cancellationSignal?.isCanceled == true ||
+                            writeResult.exceptionOrNull()?.message == "CANCELLED"
+                        ) {
+                            callback.onWriteCancelled()
+                        } else if (writeResult.isSuccess) {
+                            callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                        } else {
+                            callback.onWriteFailed(
+                                writeResult.exceptionOrNull()?.localizedMessage ?: "Print rendering failed"
+                            )
+                        }
                     }
-                    callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-                } catch (e: Exception) {
-                    callback.onWriteFailed(e.localizedMessage ?: "Print rendering failed")
-                } finally {
-                    pdfDoc.close()
                 }
             }
-        }
 
-        runCatching {
-            printManager.print("ASHA_Invoice_$safeName", adapter, attributes)
-        }.onFailure {
-            Toast.makeText(context, "Could not start print job", Toast.LENGTH_SHORT).show()
+            runCatching {
+                printManager.print("ASHA_Invoice_$safeName", adapter, attributes)
+            }.onFailure {
+                Toast.makeText(context.applicationContext, "Could not start print job", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

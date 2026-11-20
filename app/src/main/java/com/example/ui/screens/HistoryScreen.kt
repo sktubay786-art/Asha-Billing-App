@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -160,11 +161,10 @@ fun HistoryScreen(
         (base + extra).distinctBy { it.lowercase() }
     }
 
-    val totalBilled = remember(data.bills) { data.bills.sumOf { it.current } }
-    val totalCollected = remember(data.payments) { data.payments.sumOf { it.amount } }
-    val totalOutstanding = remember(data.customers, data.bills, data.payments) {
-        data.customers.sumOf { data.dueForCustomer(it.id) }
-    }
+    val totalBilled = data.totalBilled
+    val totalCollected = data.totalCollected
+    val totalSettled = data.totalSettled
+    val totalOutstanding = data.totalOutstanding
     val collectionEfficiency = if (totalBilled > 0.0) {
         (totalCollected / totalBilled).toFloat().coerceIn(0f, 1f)
     } else 0f
@@ -224,8 +224,14 @@ fun HistoryScreen(
             .groupBy { it.village.trim().ifBlank { "Unspecified Village" } }
             .map { (village, customers) ->
                 val custIds = customers.map { it.id }.toSet()
-                val vBilled = data.bills.filter { it.customerId in custIds }.sumOf { it.current }
-                val vPaid = data.payments.filter { it.customerId in custIds }.sumOf { it.amount }
+                val vOpeningSettled = data.payments
+                    .filter { it.customerId in custIds && it.billId == "opening_due" }
+                    .sumOf { it.amount }
+                val vBilled = data.bills.filter { it.customerId in custIds }.sumOf { it.allTotal } +
+                    customers.sumOf { it.openingDue } + vOpeningSettled
+                val vPaid = data.payments
+                    .filter { it.customerId in custIds && PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
+                    .sumOf { it.amount }
                 val vDue = customers.sumOf { data.dueForCustomer(it.id) }
                 val dueCount = customers.count { data.dueForCustomer(it.id) > 0.001 }
                 VillageDueSummary(
@@ -406,6 +412,53 @@ fun HistoryScreen(
                         accentBar = CrimsonDue,
                         modifier = Modifier.weight(1f)
                     )
+                }
+
+                if (totalSettled > 0.001) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = AmberBadgeBg,
+                        border = BorderStroke(0.75.dp, AmberBadgeFg.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Handshake,
+                                    contentDescription = null,
+                                    tint = AmberBadgeFg,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "SETTLED / WAIVED (EXCL. COLLECTED)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AmberBadgeFg,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text(
+                                text = formatInr(totalSettled),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AmberBadgeFg,
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -620,7 +673,7 @@ fun HistoryScreen(
                         0 -> {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 // Filtered summary ribbon
-                                val filteredSum = remember(filteredBills) { filteredBills.sumOf { it.current } }
+                                val filteredSum = remember(filteredBills) { filteredBills.sumOf { it.allTotal } }
                                 val filteredDue = remember(filteredBills, data.payments) { filteredBills.sumOf { data.dueForBill(it) } }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -678,22 +731,43 @@ fun HistoryScreen(
 
                         1 -> {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                val filteredPaySum = remember(filteredPayments) { filteredPayments.sumOf { it.amount } }
+                                val filteredCashSum = remember(filteredPayments) {
+                                    filteredPayments
+                                        .filter { PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
+                                        .sumOf { it.amount }
+                                }
+                                val filteredSettledSum = remember(filteredPayments) {
+                                    filteredPayments
+                                        .filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+                                        .sumOf { it.amount }
+                                }
+                                val isOnlySettlementFilter = selectedPaymentMode.equals(PaymentMode.SETTLEMENT.label, ignoreCase = true)
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "${filteredPayments.size} RECEIPTS (${selectedPaymentMode.uppercase()})",
+                                        text = "${filteredPayments.size} ENTRIES (${selectedPaymentMode.uppercase()})",
                                         style = BmwTelemetryStyle,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
                                     )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    val rightText = when {
+                                        isOnlySettlementFilter -> "Settled ${formatInr(filteredSettledSum)}"
+                                        filteredSettledSum > 0.001 -> "Paid ${formatInr(filteredCashSum)} · Set ${formatInr(filteredSettledSum)}"
+                                        else -> formatInr(filteredCashSum)
+                                    }
                                     Text(
-                                        text = formatInr(filteredPaySum),
+                                        text = rightText,
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = PaidBadgeFg,
-                                        fontWeight = FontWeight.ExtraBold
+                                        color = if (isOnlySettlementFilter) AmberBadgeFg else PaidBadgeFg,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                 }
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -745,7 +819,7 @@ fun HistoryScreen(
                                                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                                                     ) {
                                                         IosSquircleIcon(
-                                                            icon = Icons.Rounded.CurrencyRupee,
+                                                            icon = if (isSettlement) Icons.Rounded.Handshake else Icons.Rounded.CurrencyRupee,
                                                             containerColor = modeColor,
                                                             size = 38.dp,
                                                             iconSize = 19.dp
@@ -759,8 +833,12 @@ fun HistoryScreen(
                                                                 maxLines = 1,
                                                                 overflow = TextOverflow.Ellipsis
                                                             )
+                                                            val refLabel = when {
+                                                                payment.billId == "opening_due" -> "Opening Due"
+                                                                else -> bill?.billNo ?: "Ledger"
+                                                            }
                                                             Text(
-                                                                text = "${bill?.billNo ?: "Ledger"} · ${payment.date}${if (payment.receivedIn.isNotBlank()) " · ${payment.receivedIn}" else ""}",
+                                                                text = "$refLabel · ${payment.date}${if (payment.receivedIn.isNotBlank()) " · ${payment.receivedIn}" else ""}",
                                                                 style = MaterialTheme.typography.bodySmall,
                                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                                 maxLines = 1,
@@ -770,7 +848,7 @@ fun HistoryScreen(
                                                                 Text(
                                                                     text = payment.note,
                                                                     style = MaterialTheme.typography.labelSmall,
-                                                                    color = MaterialTheme.colorScheme.primary,
+                                                                    color = if (isSettlement) AmberBadgeFg else MaterialTheme.colorScheme.primary,
                                                                     maxLines = 1,
                                                                     overflow = TextOverflow.Ellipsis
                                                                 )
@@ -786,7 +864,7 @@ fun HistoryScreen(
                                                             Text(
                                                                 text = formatInr(payment.amount),
                                                                 style = MaterialTheme.typography.titleSmall,
-                                                                color = PaidBadgeFg,
+                                                                color = if (isSettlement) AmberBadgeFg else PaidBadgeFg,
                                                                 fontWeight = FontWeight.ExtraBold
                                                             )
                                                             Surface(

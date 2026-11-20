@@ -12,6 +12,7 @@ import com.example.data.model.Payment
 import com.example.data.model.PaymentMode
 import com.example.data.model.WbsedclBillPayment
 import com.example.data.model.WbsedclConsumer
+import com.example.data.model.formatInr
 import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.google.firebase.Firebase
@@ -405,6 +406,85 @@ class BillingRepository(
         }
     }
 
+    /**
+     * Atomically settles a bill for a negotiated lower amount:
+     * 1. [cashReceived] is recorded under the chosen [mode] (Cash/UPI/Bank) -> counts toward Collected.
+     * 2. [discountWaived] is recorded under [PaymentMode.SETTLEMENT] -> counts ONLY toward Settled (never Collected).
+     * Together, both entries bring the bill's remaining due to ₹0 (PAID).
+     */
+    suspend fun settleBillWithDiscount(
+        userId: String,
+        bill: Bill,
+        cashReceived: Double,
+        discountWaived: Double,
+        mode: PaymentMode,
+        receivedIn: String,
+        date: String,
+        note: String
+    ): Result<Unit> {
+        val docPath = "users/$userId/payments"
+        return try {
+            val uid = requireAuthorizedUid(userId)
+            require(bill.id.isNotBlank()) { "Select an invoice." }
+            require(bill.customerId.isNotBlank()) { "Missing customer reference." }
+            val cleanCash = roundMoney(max(0.0, cashReceived))
+            val cleanWaived = roundMoney(max(0.0, discountWaived))
+            require(cleanCash + cleanWaived > 0.001) { "Nothing to settle." }
+
+            val cleanDate = date.ifBlank { todayIsoDate() }
+            val safeMode = if (mode == PaymentMode.SETTLEMENT) PaymentMode.CASH else mode
+            val totalDueCleared = roundMoney(cleanCash + cleanWaived)
+            val userNote = note.trim()
+
+            val batch = db.batch()
+            if (cleanCash > 0.001) {
+                val cashRef = userDoc(uid).collection("payments").document()
+                val cashNote = buildString {
+                    append("Final settlement paid (${formatInr(cleanCash)} of ${formatInr(totalDueCleared)})")
+                    if (userNote.isNotBlank()) append(" · $userNote")
+                }
+                val cashPayment = Payment(
+                    userId = uid,
+                    billId = bill.id,
+                    customerId = bill.customerId,
+                    date = cleanDate,
+                    amount = cleanCash,
+                    mode = safeMode.label,
+                    receivedIn = receivedIn.trim().ifBlank { safeMode.label },
+                    note = cashNote
+                )
+                batch.set(cashRef, cashPayment.toCreateMap(uid))
+            }
+
+            if (cleanWaived > 0.001) {
+                val waiveRef = userDoc(uid).collection("payments").document()
+                val waiveNote = buildString {
+                    append("Settlement discount waived (${formatInr(cleanCash)} paid on ${formatInr(totalDueCleared)} due)")
+                    if (userNote.isNotBlank()) append(" · $userNote")
+                }
+                val waivePayment = Payment(
+                    userId = uid,
+                    billId = bill.id,
+                    customerId = bill.customerId,
+                    date = cleanDate,
+                    amount = cleanWaived,
+                    mode = PaymentMode.SETTLEMENT.label,
+                    receivedIn = "Settlement Waiver",
+                    note = waiveNote
+                )
+                batch.set(waiveRef, waivePayment.toCreateMap(uid))
+            }
+
+            batch.commit().awaitWrite()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docPath)
+            Result.failure(e)
+        }
+    }
+
     suspend fun updatePayment(userId: String, payment: Payment): Result<Unit> {
         var docPath = "users/$userId/payments/${payment.id}"
         return try {
@@ -476,7 +556,8 @@ class BillingRepository(
             }
 
             if (left > 0.001 && currentOpeningDue > 0.0) {
-                val newOpening = roundMoney(max(0.0, currentOpeningDue - left))
+                val openingPart = roundMoney(min(left, currentOpeningDue))
+                val newOpening = roundMoney(max(0.0, currentOpeningDue - openingPart))
                 val customerRef = userDoc(uid).collection("customers").document(customerId)
                 batch.update(
                     customerRef,
@@ -485,6 +566,19 @@ class BillingRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                if (openingPart > 0.001) {
+                    val openingPayRef = userDoc(uid).collection("payments").document()
+                    val openingSettlement = Payment(
+                        billId = "opening_due",
+                        customerId = customerId,
+                        date = today,
+                        amount = openingPart,
+                        mode = PaymentMode.SETTLEMENT.label,
+                        receivedIn = "Opening Due Settled",
+                        note = "Opening balance settlement adjustment"
+                    )
+                    batch.set(openingPayRef, openingSettlement.toCreateMap(uid))
+                }
             }
 
             batch.commit().awaitWrite()

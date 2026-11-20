@@ -91,7 +91,8 @@ fun SettledSummaryBannerCard(
     modifier: Modifier = Modifier
 ) {
     val settledSharePct = remember(settledAmount, totalCollected) {
-        if (totalCollected > 0.01) ((settledAmount / totalCollected) * 100.0).toInt().coerceIn(0, 100)
+        val totalCleared = totalCollected + settledAmount
+        if (totalCleared > 0.01) ((settledAmount / totalCleared) * 100.0).toInt().coerceIn(0, 100)
         else 0
     }
 
@@ -144,9 +145,9 @@ fun SettledSummaryBannerCard(
                     )
                     Text(
                         text = if (settledCount > 0) {
-                            "$settledCount settlement${if (settledCount == 1) "" else "s"} · $settledSharePct% of receipts"
+                            "$settledCount settlement${if (settledCount == 1) "" else "s"} · $settledSharePct% of cleared (excl. Collected)"
                         } else {
-                            "No settlements recorded yet"
+                            "Tracked separately from Collected"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

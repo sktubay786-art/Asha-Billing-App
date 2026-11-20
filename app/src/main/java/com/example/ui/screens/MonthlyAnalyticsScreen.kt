@@ -66,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BillingDashboardData
+import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.IosSquircleIcon
@@ -162,12 +163,16 @@ fun MonthlyAnalyticsScreen(
                             Text(
                                 text = "Monthly Profit & Loss",
                                 style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "Revenue vs Operational Costs",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -176,7 +181,12 @@ fun MonthlyAnalyticsScreen(
                         onClick = onOpenExpenses,
                         modifier = Modifier.testTag("analytics_open_expenses_button")
                     ) {
-                        Text("Expenses →", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Expenses →",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
 
@@ -813,6 +823,7 @@ private fun buildMonthlyPoints(data: BillingDashboardData): List<MonthlyPnLPoint
 
     return keys.sorted().map { key ->
         val monthPayments = data.payments.filter { extractMonthKey(it.date) == key }
+        val cashMonthPayments = monthPayments.filter { PaymentMode.fromLabel(it.mode) != PaymentMode.SETTLEMENT }
         val monthBills = data.bills.filter { extractMonthKey(it.date) == key }
         val monthExpenses = data.expenses.filter { extractMonthKey(it.date) == key }
 
@@ -821,11 +832,11 @@ private fun buildMonthlyPoints(data: BillingDashboardData): List<MonthlyPnLPoint
             monthKey = key,
             shortLabel = ym?.format(shortFmt) ?: key,
             fullLabel = ym?.format(fullFmt) ?: key,
-            collectedRevenue = monthPayments.sumOf { it.amount },
+            collectedRevenue = cashMonthPayments.sumOf { it.amount },
             billedRevenue = monthBills.sumOf { it.current.coerceAtLeast(0.0) },
             operationalCosts = monthExpenses.sumOf { it.amount },
             expenseCount = monthExpenses.size,
-            paymentCount = monthPayments.size,
+            paymentCount = cashMonthPayments.size,
             billCount = monthBills.size
         )
     }

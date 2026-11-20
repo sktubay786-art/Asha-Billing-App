@@ -81,7 +81,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -223,6 +225,8 @@ fun BillRowItem(
     val context = LocalContext.current
     val payments = data.paymentsForBill(bill.id)
     val paid = data.paidForBill(bill.id)
+    val cashPaid = data.cashCollectedForBill(bill.id)
+    val settledWaived = data.settledForBill(bill.id)
     val due = data.dueForBill(bill)
     val status = data.statusForBill(bill)
     val reminderStore = remember(context) { DueReminderStore(context) }
@@ -327,10 +331,20 @@ fun BillRowItem(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = if (due > 0.001) "Due ${formatInr(due)}" else "Cleared",
+                    text = when {
+                        due > 0.001 -> "Due ${formatInr(due)}"
+                        settledWaived > 0.001 -> "Paid ${formatInr(cashPaid)} · Set ${formatInr(settledWaived)}"
+                        else -> "Cleared"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (due > 0.001) CrimsonDue else PaidBadgeFg,
-                    fontWeight = FontWeight.SemiBold
+                    color = when {
+                        due > 0.001 -> CrimsonDue
+                        settledWaived > 0.001 -> AmberBadgeFg
+                        else -> PaidBadgeFg
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -714,30 +728,38 @@ fun InvoiceDetailDialog(
         }
     }
 
+    val exportScope = rememberCoroutineScope()
+
     val pdfSaverLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri ->
         if (uri != null) {
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    BillDocumentEngine.writeBillPdfToStream(
-                        outputStream = out,
-                        settings = data.settings,
-                        bill = bill,
-                        payments = payments,
-                        paid = paid,
-                        due = due,
-                        design = selectedDesign,
-                        size = selectedSize,
-                        qrMode = qrMode,
-                        customQrPath = customQrPath,
-                        bengaliLabels = bengaliMode
-                    )
+            val appContext = context.applicationContext
+            exportScope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching {
+                        appContext.contentResolver.openOutputStream(uri)?.use { out ->
+                            BillDocumentEngine.writeBillPdfToStream(
+                                outputStream = out,
+                                settings = data.settings,
+                                bill = bill,
+                                payments = payments,
+                                paid = paid,
+                                due = due,
+                                design = selectedDesign,
+                                size = selectedSize,
+                                qrMode = qrMode,
+                                customQrPath = customQrPath,
+                                bengaliLabels = bengaliMode
+                            )
+                        }
+                    }
                 }
-            }.onSuccess {
-                Toast.makeText(context, "PDF saved", Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                Toast.makeText(context, "Could not save PDF", Toast.LENGTH_SHORT).show()
+                res.onSuccess {
+                    Toast.makeText(appContext, "PDF saved", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Toast.makeText(appContext, "Could not save PDF", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -759,12 +781,20 @@ fun InvoiceDetailDialog(
         contract = ActivityResultContracts.CreateDocument("image/png")
     ) { uri ->
         if (uri != null) {
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    BillDocumentEngine.writeBillPngToStream(out, renderFullExportBitmap())
+            val appContext = context.applicationContext
+            exportScope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    runCatching {
+                        appContext.contentResolver.openOutputStream(uri)?.use { out ->
+                            BillDocumentEngine.writeBillPngToStream(out, renderFullExportBitmap())
+                        }
+                    }
                 }
-            }.onSuccess {
-                Toast.makeText(context, "Image saved", Toast.LENGTH_SHORT).show()
+                res.onSuccess {
+                    Toast.makeText(appContext, "Image saved", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Toast.makeText(appContext, "Could not save image", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -1577,7 +1607,20 @@ private fun IosWalletBillPassCard(
                             )
                         }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        val passSettled = remember(payments) {
+                            com.example.data.model.roundMoney(
+                                payments
+                                    .filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+                                    .sumOf { it.amount }
+                            )
+                        }
+                        val passCashPaid = if (passSettled > 0.001) {
+                            com.example.data.model.roundMoney(kotlin.math.max(0.0, paid - passSettled))
+                        } else {
+                            paid
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
                                     text = if (bengaliMode) "জমা" else "PAID",
@@ -1587,15 +1630,32 @@ private fun IosWalletBillPassCard(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = formatInr(paid),
+                                    text = formatInr(passCashPaid),
                                     style = MaterialTheme.typography.titleMedium,
                                     color = Color(0xFF86EFAC),
                                     fontWeight = FontWeight.Bold
                                 )
                             }
+                            if (passSettled > 0.001) {
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = if (bengaliMode) "ছাড়" else "SETTLED",
+                                        fontSize = 9.5.sp,
+                                        letterSpacing = 0.6.sp,
+                                        color = Color.White.copy(alpha = 0.78f),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = formatInr(passSettled),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color(0xFFFDE68A),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = if (bengaliMode) "মোট বাকি" else "PAYABLE DUE",
+                                    text = if (bengaliMode) "মোট বাকি" else "DUE",
                                     fontSize = 9.5.sp,
                                     letterSpacing = 0.6.sp,
                                     color = Color.White.copy(alpha = 0.78f),
@@ -1725,8 +1785,9 @@ private fun IosWalletBillPassCard(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                val isSetEntry = PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT
                                 Text(
-                                    text = "${p.date} · ${p.mode}",
+                                    text = "${p.date} · ${if (isSetEntry) "Settled / Discount" else p.mode}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f)
@@ -1736,9 +1797,9 @@ private fun IosWalletBillPassCard(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "+${formatInr(p.amount)}",
+                                        text = if (isSetEntry) formatInr(p.amount) else "+${formatInr(p.amount)}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = PaidBadgeFg,
+                                        color = if (isSetEntry) AmberBadgeFg else PaidBadgeFg,
                                         fontWeight = FontWeight.Bold
                                     )
                                     if (onEditPayment != null) {
@@ -1862,15 +1923,16 @@ private fun IosWalletBillPassCard(
                         }
                     }
                 }
-                // Compact 1D Code 128 Barcode for Customer ID (fast camera lookup)
-                val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+                // Compact 1D Code 128C Barcode for Customer ID (fast camera lookup)
+                val customerBarcodeId = com.example.data.model.compactCustomerBarcodeId(bill.customerId)
+                    .takeIf { it.isNotBlank() }
                 val customerBarcodeImg by produceState<ImageBitmap?>(
                     initialValue = null,
                     customerBarcodeId
                 ) {
                     value = customerBarcodeId?.let { id ->
                         withContext(Dispatchers.Default) {
-                            BillDocumentEngine.generateCode128BarcodeBitmap(id, widthPx = 560, heightPx = 92)
+                            BillDocumentEngine.generateCode128BarcodeBitmap(id, widthPx = 480, heightPx = 96)
                                 ?.asImageBitmap()
                         }
                     }
@@ -1885,24 +1947,25 @@ private fun IosWalletBillPassCard(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             Image(
                                 bitmap = customerBarcodeImg!!,
                                 contentDescription = "Customer ID Barcode",
-                                contentScale = ContentScale.FillBounds,
+                                contentScale = ContentScale.Fit,
+                                filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
                                 modifier = Modifier
-                                    .fillMaxWidth(0.86f)
-                                    .height(42.dp)
+                                    .fillMaxWidth()
+                                    .height(50.dp)
                             )
                             Text(
-                                text = "CUSTOMER ID · $customerBarcodeId",
+                                text = "CUSTOMER ID · CID-$customerBarcodeId",
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF475569)
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFF0F172A)
                             )
                         }
                     }

@@ -102,11 +102,12 @@ object CsvReportExporter {
                     csvRow(
                         "Bill No", "Date", "Customer Name", "Phone", "Village",
                         "Season", "Land Area", "Unit", "Bigha", "Rate/Bigha",
-                        "Current Bill", "Previous Due", "Total Amount", "Paid", "Due", "Status", "Note"
+                        "Current Bill", "Previous Due", "Total Amount", "Paid (Cash/UPI)", "Settled / Waived", "Due", "Status", "Note"
                     )
                 )
                 data.bills.sortedByDescending { it.date }.forEach { bill ->
-                    val paid = data.paidForBill(bill.id)
+                    val paidCash = data.cashCollectedForBill(bill.id)
+                    val settledWaived = data.settledForBill(bill.id)
                     val due = data.dueForBill(bill)
                     val status = data.statusForBill(bill).label
                     sb.appendLine(
@@ -124,7 +125,8 @@ object CsvReportExporter {
                             fmtNum(bill.current),
                             fmtNum(bill.previousDue),
                             fmtNum(bill.allTotal),
-                            fmtNum(paid),
+                            fmtNum(paidCash),
+                            fmtNum(settledWaived),
                             fmtNum(due),
                             status,
                             bill.note
@@ -138,12 +140,18 @@ object CsvReportExporter {
                     csvRow(
                         "Customer ID", "Name", "Phone", "Village", "Address",
                         "Land Area", "Land Unit", "Owner Type", "Owner Name",
-                        "Opening Due", "Total Billed", "Total Paid", "Outstanding Due"
+                        "Opening Due", "Total Billed", "Total Paid", "Total Settled", "Outstanding Due"
                     )
                 )
                 data.customers.sortedBy { it.name.lowercase() }.forEach { cust ->
-                    val billed = data.bills.filter { it.customerId == cust.id }.sumOf { it.current }
-                    val paid = data.payments.filter { it.customerId == cust.id }.sumOf { it.amount }
+                    val billed = data.bills.filter { it.customerId == cust.id }.sumOf { it.allTotal }
+                    val custPayments = data.payments.filter { it.customerId == cust.id }
+                    val paid = custPayments
+                        .filter { com.example.data.model.PaymentMode.fromLabel(it.mode) != com.example.data.model.PaymentMode.SETTLEMENT }
+                        .sumOf { it.amount }
+                    val settled = custPayments
+                        .filter { com.example.data.model.PaymentMode.fromLabel(it.mode) == com.example.data.model.PaymentMode.SETTLEMENT }
+                        .sumOf { it.amount }
                     val due = data.dueForCustomer(cust.id)
                     sb.appendLine(
                         csvRow(
@@ -159,6 +167,7 @@ object CsvReportExporter {
                             fmtNum(cust.openingDue),
                             fmtNum(billed),
                             fmtNum(paid),
+                            fmtNum(settled),
                             fmtNum(due)
                         )
                     )

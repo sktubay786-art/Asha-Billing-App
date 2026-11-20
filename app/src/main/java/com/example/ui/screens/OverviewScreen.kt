@@ -190,7 +190,7 @@ fun OverviewScreen(
     }
 
     val totalBilled = remember(filteredBills) { filteredBills.sumOf { it.allTotal } }
-    val totalCollected = remember(filteredBills, data) { filteredBills.sumOf { data.paidForBill(it.id) } }
+    val totalCollected = remember(filteredBills, data) { filteredBills.sumOf { data.cashCollectedForBill(it.id) } }
     val settledStats = remember(filteredPayments) {
         var amount = 0.0
         var count = 0
@@ -234,7 +234,7 @@ fun OverviewScreen(
                 val custIds = custList.map { it.id }.toSet()
                 val vBills = data.bills.filter { it.customerId in custIds }
                 val billed = vBills.sumOf { it.allTotal }
-                val collected = vBills.sumOf { data.paidForBill(it.id) }
+                val collected = vBills.sumOf { data.cashCollectedForBill(it.id) }
                 val due = custList.sumOf { data.dueForCustomer(it.id) }
                 val dueCusts = custList.count { data.dueForCustomer(it.id) > 0.001 }
                 VillageDueSummary(
@@ -520,10 +520,11 @@ fun OverviewScreen(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -533,44 +534,78 @@ fun OverviewScreen(
                             size = 38.dp,
                             iconSize = 20.dp
                         )
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "FINANCIAL TELEMETRY",
                                 style = BmwTelemetryStyle,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "Profit & Loss",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.ExtraBold
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "${data.expenses.size} expenses logged",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        TextButton(
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
                             onClick = onOpenMonthlyAnalytics,
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
                             modifier = Modifier.testTag("overview_monthly_chart_button")
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.BarChart,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Chart", fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.BarChart,
+                                    contentDescription = "Chart",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "Chart",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
                         }
-                        TextButton(
+                        Surface(
                             onClick = onOpenExpenses,
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.testTag("overview_manage_expenses_button")
                         ) {
-                            Text("Expenses →", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "Expenses",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                            )
                         }
                     }
                 }

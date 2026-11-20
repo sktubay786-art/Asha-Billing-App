@@ -25,9 +25,12 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.example.auth.AuthScreen
 import com.example.auth.OwnerAccessControl
 import com.example.auth.authStateFlow
@@ -53,6 +56,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 class MainActivity : FragmentActivity() {
     private val pendingNotificationBillId = mutableStateOf<String?>(null)
 
+    private val prefsStore by lazy { AppPreferencesStore(applicationContext) }
+
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,7 +68,6 @@ class MainActivity : FragmentActivity() {
             DueReminderScheduler.rescheduleAll(applicationContext)
         }
 
-        val prefsStore = AppPreferencesStore(applicationContext)
         setContent {
             val localPrefs by prefsStore.state.collectAsStateWithLifecycle()
             val accent = ThemeColorOption.fromKey(localPrefs.themeColorKey)
@@ -131,11 +135,17 @@ fun AppNavigation(
         )
     } else {
         val sessionUnlocked = unlockedUid == user.uid
-        val biometricAvailable = remember(context) { checkBiometricAvailability(context).isAvailable }
-        val requiresLoginGate = localPrefs.biometricEnabled &&
+        val needsBiometricCheck = localPrefs.biometricEnabled &&
             localPrefs.biometricOnLogin &&
-            biometricAvailable &&
             !sessionUnlocked
+        val biometricAvailable by produceState(initialValue = false, context, needsBiometricCheck) {
+            value = if (needsBiometricCheck) {
+                withContext(Dispatchers.IO) { checkBiometricAvailability(context).isAvailable }
+            } else {
+                false
+            }
+        }
+        val requiresLoginGate = needsBiometricCheck && biometricAvailable
 
         if (requiresLoginGate) {
             val accent = ThemeColorOption.fromKey(localPrefs.themeColorKey)
@@ -152,8 +162,8 @@ fun AppNavigation(
             )
         } else {
             val isDeviceOnline by remember(context) {
-                OfflineModeManager.observeNetworkOnline(context)
-            }.collectAsStateWithLifecycle(initialValue = OfflineModeManager.isCurrentlyOnline(context))
+                OfflineModeManager.observeNetworkOnline(context).flowOn(Dispatchers.IO)
+            }.collectAsStateWithLifecycle(initialValue = true)
 
             val workspaceId = OwnerAccessControl.workspaceIdFor(user)
             key(user.uid, workspaceId) {

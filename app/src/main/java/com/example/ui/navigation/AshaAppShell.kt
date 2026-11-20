@@ -655,9 +655,25 @@ fun AshaAppShell(
                                                     onSaved = onSaved
                                                 )
                                             },
+                                            onSettleBillWithDiscount = { bill, cashReceived, currentDue, mode, receivedIn, date, note, onSettled ->
+                                                viewModel.settleBillWithDiscount(
+                                                    bill = bill,
+                                                    cashReceived = cashReceived,
+                                                    currentDue = currentDue,
+                                                    mode = mode,
+                                                    receivedIn = receivedIn,
+                                                    date = date,
+                                                    note = note,
+                                                    onSettled = onSettled
+                                                )
+                                            },
                                             onEditPayment = { editingPaymentTarget = it },
                                             onDeletePayment = { deletingPaymentTarget = it },
-                                            defaultPrintSize = defaultPrintSize
+                                            defaultBillDesign = defaultDesignModel,
+                                            defaultPrintSize = defaultPrintSize,
+                                            qrMode = localPrefs.qrMode,
+                                            customQrPath = localPrefs.qrImagePath,
+                                            bengaliLabels = bengaliBillMode
                                         )
                                     }
                                 }

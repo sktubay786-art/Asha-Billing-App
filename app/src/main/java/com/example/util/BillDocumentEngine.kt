@@ -25,7 +25,10 @@ import androidx.core.content.FileProvider
 import com.example.data.model.Bill
 import com.example.data.model.BusinessSettings
 import com.example.data.model.Payment
+import com.example.data.model.PaymentMode
+import com.example.data.model.compactCustomerBarcodeId
 import com.example.data.model.formatInr
+import com.example.data.model.roundMoney
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.oned.Code128Writer
@@ -35,6 +38,11 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -238,38 +246,84 @@ object BillDocumentEngine {
     }
 
     /**
-     * Generates a crisp, compact horizontal 1D Code 128 barcode (used for short Customer IDs).
+     * Generates a razor-sharp, pixel-perfect 1D Code 128 barcode with exact integer module widths
+     * and ISO/IEC 15417 compliant pure-white quiet zones (12 modules on each side) so camera
+     * scanners lock instantly even on compact A4-1/4 bills and 58mm thermal receipts.
      */
     fun generateCode128BarcodeBitmap(
         content: String,
         widthPx: Int = 560,
-        heightPx: Int = 96
+        heightPx: Int = 110
     ): Bitmap? {
         val clean = content.trim()
         if (clean.isBlank()) return null
-        val cacheKey = "C128|$widthPx|$heightPx|$clean"
+        val cacheKey = "C128V2|$widthPx|$heightPx|$clean"
         synchronized(qrBitmapCache) {
             qrBitmapCache.get(cacheKey)?.let { if (!it.isRecycled) return it }
         }
         return runCatching {
-            val hints = mapOf(EncodeHintType.MARGIN to 4)
-            val matrix = Code128Writer().encode(clean, BarcodeFormat.CODE_128, widthPx, heightPx, hints)
-            val w = matrix.width
-            val h = matrix.height
-            val pixels = IntArray(w * h)
-            var offset = 0
-            for (y in 0 until h) {
-                for (x in 0 until w) {
-                    pixels[offset++] = if (matrix.get(x, y)) Color.BLACK else Color.WHITE
+            val rawMatrix = Code128Writer().encode(
+                clean,
+                BarcodeFormat.CODE_128,
+                0,
+                1,
+                mapOf(EncodeHintType.MARGIN to 0)
+            )
+            val rawModules = rawMatrix.width
+            val quietModules = 12
+            val totalModules = rawModules + quietModules * 2
+            val modulePx = max(2, widthPx / totalModules)
+            val outW = totalModules * modulePx
+            val outH = heightPx.coerceAtLeast(64)
+
+            val pixels = IntArray(outW * outH) { Color.WHITE }
+            for (m in 0 until rawModules) {
+                if (rawMatrix.get(m, 0)) {
+                    val startX = (quietModules + m) * modulePx
+                    val endX = startX + modulePx
+                    for (y in 0 until outH) {
+                        val rowOffset = y * outW
+                        for (x in startX until endX) {
+                            pixels[rowOffset + x] = Color.BLACK
+                        }
+                    }
                 }
             }
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            bmp.setPixels(pixels, 0, w, 0, 0, w, h)
+            val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            bmp.setPixels(pixels, 0, outW, 0, 0, outW, outH)
             synchronized(qrBitmapCache) {
                 qrBitmapCache.put(cacheKey, bmp)
             }
             bmp
         }.getOrNull()
+    }
+
+    private fun crispBarcodePaint(): Paint = Paint().apply {
+        isAntiAlias = false
+        isFilterBitmap = false
+        isDither = false
+    }
+
+    /**
+     * Splits total credited amount ([totalPaid]) into (actualCashPaid, settledWaived) using the
+     * bill's [payments] list so printed receipts show the real money received in "Paid" and any
+     * negotiated waiver separately in "Settled / Discount".
+     */
+    private fun splitPaidAndSettled(
+        payments: List<Payment>,
+        totalPaid: Double
+    ): Pair<Double, Double> {
+        val settledWaived = roundMoney(
+            payments
+                .filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+                .sumOf { it.amount }
+        )
+        val actualCashPaid = if (settledWaived > 0.001) {
+            roundMoney(max(0.0, totalPaid - settledWaived))
+        } else {
+            roundMoney(max(0.0, totalPaid))
+        }
+        return actualCashPaid to settledWaived
     }
 
     fun resolveQrBitmap(
@@ -381,8 +435,10 @@ object BillDocumentEngine {
     }
 
     /**
-     * Draws a sleek, ultra-compact 1D Code 128 Customer ID barcode strip positioned right after the
-     * bill header so it stays completely separate from the square Payment UPI QR at the bottom.
+     * Draws a unified, high-contrast pure-white 1D Code 128C Customer ID barcode strip right after
+     * the bill header (completely separate from the square Payment UPI QR at the bottom).
+     * Barcode bars and compact CID text are unified together with generous white quiet zones
+     * and zero bilinear downscaling so mobile scanners lock instantly.
      */
     private fun drawCompactTopCustomerBarcodeBar(
         canvas: Canvas,
@@ -397,35 +453,39 @@ object BillDocumentEngine {
         borderPaint: Paint,
         fillPaint: Paint? = null
     ): Float {
-        val barCardH = dp(52f)
+        val barCardH = dp(78f)
         val rect = RectF(left, topY, right, topY + barCardH)
-        if (fillPaint != null) {
-            canvas.drawRoundRect(rect, dp(12f), dp(12f), fillPaint)
-        }
+        val pureWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        canvas.drawRoundRect(rect, dp(12f), dp(12f), pureWhite)
         canvas.drawRoundRect(rect, dp(12f), dp(12f), borderPaint)
 
-        // Left: Compact ID label & code
-        val capPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = primaryColor
-            textSize = dp(10f)
-            letterSpacing = 0.08f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
+        // Centered crisp 1D Code 128C barcode drawn at native integer pixel width (never downscaled!)
+        val maxAvailW = (rect.width() - dp(28f)).roundToInt().coerceAtLeast(160)
+        val drawW = min(barcodeBitmap.width, maxAvailW)
+        val drawH = dp(44f).roundToInt().coerceAtLeast(40)
+        val bLeft = (rect.centerX() - drawW / 2f).roundToInt()
+        val bTop = (rect.top + dp(9f)).roundToInt()
+        canvas.drawBitmap(
+            barcodeBitmap,
+            null,
+            Rect(bLeft, bTop, bLeft + drawW, bTop + drawH),
+            crispBarcodePaint()
+        )
+
+        // Unified compact Customer Barcode ID label centered cleanly beneath the bars
         val idValPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = mutedColor
-            textSize = dp(12.5f)
+            color = 0xFF0F172A.toInt()
+            textSize = dp(12f)
+            letterSpacing = 0.12f
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         }
-        canvas.drawText("CUSTOMER ID", rect.left + dp(14f), rect.top + dp(21f), capPaint)
-        canvas.drawText(customerId.take(20), rect.left + dp(14f), rect.top + dp(39f), idValPaint)
-
-        // Right: Crisp compact horizontal 1D Code 128 barcode
-        val bW = dp(230f).roundToInt()
-        val bH = dp(34f).roundToInt()
-        val bRight = (rect.right - dp(12f)).roundToInt()
-        val bLeft = (bRight - bW).coerceAtLeast((rect.centerX() - dp(10f)).roundToInt())
-        val bTop = (rect.top + (barCardH - bH) / 2f).roundToInt()
-        canvas.drawBitmap(barcodeBitmap, null, Rect(bLeft, bTop, bRight, bTop + bH), null)
+        val labelText = "CUSTOMER ID  •  CID-$customerId"
+        canvas.drawText(
+            labelText,
+            rect.centerX() - idValPaint.measureText(labelText) / 2f,
+            rect.bottom - dp(9f),
+            idValPaint
+        )
 
         return topY + barCardH + dp(12f)
     }
@@ -453,16 +513,18 @@ object BillDocumentEngine {
         val outerPad = dp(24f)
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
-        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeId = compactCustomerBarcodeId(bill.customerId).takeIf { it.isNotBlank() }
         val customerBarcodeBitmap = customerBarcodeId?.let {
             generateCode128BarcodeBitmap(
                 it,
-                widthPx = dp(360f).roundToInt().coerceAtLeast(300),
-                heightPx = dp(52f).roundToInt().coerceAtLeast(44)
+                widthPx = dp(290f).roundToInt().coerceAtLeast(220),
+                heightPx = dp(52f).roundToInt().coerceAtLeast(48)
             )
         }
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
+        val (actualCashPaid, settledWaived) = splitPaidAndSettled(payments, paid)
+        val hasSettlement = settledWaived > 0.001
         val paymentRowsCount = minOf(payments.size, 3)
 
         val primaryColor = design.primaryColorInt
@@ -476,10 +538,10 @@ object BillDocumentEngine {
 
         var estH = outerPad * 2f
         estH += dp(138f) // Centered Executive Crown Letterhead
-        estH += dp(12f) + dp(72f) // Meta + Compact Barcode top strip
+        estH += dp(12f) + dp(86f) // Meta + Compact Barcode top strip
         estH += dp(12f) + dp(104f) // Horizontal 2x2 Customer Info band
         estH += dp(14f) + dp(196f) // Formal 4-column Ledger Table + Totals row
-        estH += dp(14f) + if (qrBitmap != null) dp(210f) else dp(170f) // Bottom Split Payment Summary + UPI QR
+        estH += dp(14f) + if (qrBitmap != null) dp(if (hasSettlement) 232f else 210f) else dp(if (hasSettlement) 196f else 170f) // Bottom Split Payment Summary + UPI QR
         if (hasNote) estH += dp(10f) + dp(34f)
         estH += dp(14f) + dp(96f) // Handwritten Signature + footer
         if (size.isFullA4) {
@@ -608,40 +670,46 @@ object BillDocumentEngine {
         y += headerH + dp(12f)
 
         // 2. Top Meta & Compact Customer Barcode Band (Separated from Bottom QR!)
-        val metaH = dp(70f)
+        val metaH = dp(84f)
         val metaRect = RectF(outerPad, y, w - outerPad, y + metaH)
         canvas.drawRoundRect(metaRect, dp(12f), dp(12f), accentFill)
         canvas.drawRoundRect(metaRect, dp(12f), dp(12f), tableBorderPaint)
 
         // Left side: Bill No & Date stacked cleanly
-        val metaLeftW = if (customerBarcodeBitmap != null) (metaRect.width() * 0.50f) else metaRect.width()
-        canvas.drawText(if (isBengali) "বিল নং" else "BILL NO.", metaRect.left + dp(14f), metaRect.top + dp(23f), capPaint)
-        canvas.drawText(bill.billNo.ifBlank { "ASHA" }, metaRect.left + dp(14f), metaRect.top + dp(43f), valPaint)
+        val metaLeftW = if (customerBarcodeBitmap != null) (metaRect.width() * 0.46f) else metaRect.width()
+        canvas.drawText(if (isBengali) "বিল নং" else "BILL NO.", metaRect.left + dp(14f), metaRect.top + dp(25f), capPaint)
+        canvas.drawText(bill.billNo.ifBlank { "ASHA" }, metaRect.left + dp(14f), metaRect.top + dp(47f), valPaint)
 
         val dateColX = metaRect.left + metaLeftW * 0.52f
-        canvas.drawText(if (isBengali) "তারিখ" else "DATE", dateColX, metaRect.top + dp(23f), capPaint)
-        canvas.drawText(bill.date, dateColX, metaRect.top + dp(43f), valPaint)
+        canvas.drawText(if (isBengali) "তারিখ" else "DATE", dateColX, metaRect.top + dp(25f), capPaint)
+        canvas.drawText(bill.date, dateColX, metaRect.top + dp(47f), valPaint)
         if (bill.season.isNotBlank()) {
             val seasonTiny = TextPaint(labelPaint).apply { textSize = dp(11.5f) }
-            canvas.drawText("${if (isBengali) "সিজন" else "Season"}: ${bill.season.take(22)}", metaRect.left + dp(14f), metaRect.bottom - dp(8f), seasonTiny)
+            canvas.drawText("${if (isBengali) "সিজন" else "Season"}: ${bill.season.take(22)}", metaRect.left + dp(14f), metaRect.bottom - dp(10f), seasonTiny)
         }
 
-        // Right side: Compact 1D Customer ID Barcode
+        // Right side: Pure-white inset box with crisp Code 128C Barcode + compact CID
         if (customerBarcodeBitmap != null && customerBarcodeId != null) {
             val divX = metaRect.left + metaLeftW
-            canvas.drawLine(divX, metaRect.top + dp(10f), divX, metaRect.bottom - dp(10f), tableBorderPaint)
-            val bW = (metaRect.right - divX - dp(24f)).roundToInt().coerceAtLeast(120)
-            val bH = dp(36f).roundToInt()
-            val bLeft = (divX + (metaRect.right - divX - bW) / 2f).roundToInt()
-            val bTop = (metaRect.top + dp(10f)).roundToInt()
-            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(bLeft, bTop, bLeft + bW, bTop + bH), null)
+            val whiteBox = RectF(divX + dp(6f), metaRect.top + dp(6f), metaRect.right - dp(6f), metaRect.bottom - dp(6f))
+            canvas.drawRoundRect(whiteBox, dp(9f), dp(9f), whiteFill)
+            canvas.drawRoundRect(whiteBox, dp(9f), dp(9f), tableBorderPaint)
+
+            val maxBoxW = (whiteBox.width() - dp(14f)).roundToInt().coerceAtLeast(140)
+            val bW = min(customerBarcodeBitmap.width, maxBoxW)
+            val bH = dp(42f).roundToInt().coerceAtLeast(38)
+            val bLeft = (whiteBox.centerX() - bW / 2f).roundToInt()
+            val bTop = (whiteBox.top + dp(6f)).roundToInt()
+            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(bLeft, bTop, bLeft + bW, bTop + bH), crispBarcodePaint())
+
             val cidPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = mutedColor
-                textSize = dp(10.5f)
+                color = inkColor
+                textSize = dp(11f)
+                letterSpacing = 0.08f
                 typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             }
-            val cidTxt = "ID: $customerBarcodeId"
-            canvas.drawText(cidTxt, divX + (metaRect.right - divX - cidPaint.measureText(cidTxt)) / 2f, metaRect.bottom - dp(9f), cidPaint)
+            val cidTxt = "CID-$customerBarcodeId"
+            canvas.drawText(cidTxt, whiteBox.centerX() - cidPaint.measureText(cidTxt) / 2f, whiteBox.bottom - dp(7f), cidPaint)
         }
         y += metaH + dp(12f)
 
@@ -749,7 +817,7 @@ object BillDocumentEngine {
         y += tableH + dp(14f)
 
         // 5. Bottom Split Block: Left = Payment Receipt & Balance Due, Right = Square UPI QR (Far from top barcode!)
-        val splitH = if (qrBitmap != null) dp(206f) else dp(166f)
+        val splitH = if (qrBitmap != null) dp(if (hasSettlement) 230f else 206f) else dp(if (hasSettlement) 194f else 166f)
         val gap = dp(12f)
         val availW = w - outerPad * 2f
         val leftW = if (qrBitmap != null) (availW - gap) * 0.58f else availW
@@ -759,22 +827,40 @@ object BillDocumentEngine {
 
         canvas.drawText(if (isBengali) "পেমেন্ট সারসংক্ষেপ" else "SETTLEMENT LEDGER", payRect.left + dp(14f), payRect.top + dp(24f), capPaint)
 
-        // Paid Received row
-        val paidPaint = TextPaint(valPaint).apply { color = 0xFF15803D.toInt(); textSize = dp(16f) }
-        canvas.drawText(if (isBengali) "জমা (Paid)" else "Paid Received", payRect.left + dp(14f), payRect.top + dp(54f), labelPaint)
-        val paidStr = formatInr(paid)
-        canvas.drawText(paidStr, payRect.right - dp(14f) - paidPaint.measureText(paidStr), payRect.top + dp(54f), paidPaint)
+        // Actual Cash/UPI Paid row (excludes Settlement waiver!)
+        val paidPaint = TextPaint(valPaint).apply { color = 0xFF15803D.toInt(); textSize = dp(15.5f) }
+        canvas.drawText(if (isBengali) "জমা (Paid)" else "Paid Received", payRect.left + dp(14f), payRect.top + dp(52f), labelPaint)
+        val paidStr = formatInr(actualCashPaid)
+        canvas.drawText(paidStr, payRect.right - dp(14f) - paidPaint.measureText(paidStr), payRect.top + dp(52f), paidPaint)
+
+        var py = payRect.top + dp(76f)
+        if (hasSettlement) {
+            val settledPaint = TextPaint(valPaint).apply { color = 0xFFB45309.toInt(); textSize = dp(14.5f) }
+            canvas.drawText(
+                if (isBengali) "ছাড় / সেটেল" else "Settled / Discount",
+                payRect.left + dp(14f),
+                py,
+                labelPaint
+            )
+            val setStr = formatInr(settledWaived)
+            canvas.drawText(setStr, payRect.right - dp(14f) - settledPaint.measureText(setStr), py, settledPaint)
+            py += dp(24f)
+        }
 
         // Recent payments compact lines (up to 3)
-        var py = payRect.top + dp(78f)
         if (paymentRowsCount > 0) {
             val miniPaint = TextPaint(labelPaint).apply { textSize = dp(11.5f) }
             payments.take(paymentRowsCount).forEach { p ->
-                canvas.drawText("${p.date} · ${p.mode}", payRect.left + dp(14f), py, miniPaint)
-                val pAmt = "+${formatInr(p.amount)}"
-                val pGreen = TextPaint(miniPaint).apply { color = 0xFF15803D.toInt(); typeface = Typeface.DEFAULT_BOLD }
-                canvas.drawText(pAmt, payRect.right - dp(14f) - pGreen.measureText(pAmt), py, pGreen)
-                py += dp(20f)
+                val isSetRow = PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT
+                val modeLbl = if (isSetRow) (if (isBengali) "সেটেল ছাড়" else "Settled") else p.mode
+                canvas.drawText("${p.date} · $modeLbl", payRect.left + dp(14f), py, miniPaint)
+                val pAmt = if (isSetRow) formatInr(p.amount) else "+${formatInr(p.amount)}"
+                val pCol = TextPaint(miniPaint).apply {
+                    color = if (isSetRow) 0xFFB45309.toInt() else 0xFF15803D.toInt()
+                    typeface = Typeface.DEFAULT_BOLD
+                }
+                canvas.drawText(pAmt, payRect.right - dp(14f) - pCol.measureText(pAmt), py, pCol)
+                py += dp(19f)
             }
         }
 
@@ -798,12 +884,16 @@ object BillDocumentEngine {
 
             val qrSize = dp(122f).roundToInt()
             val qrLeft = (qrRect.centerX() - qrSize / 2f).roundToInt()
-            val qrTop = (qrRect.top + dp(34f)).roundToInt()
+            val qrTop = (qrRect.top + (splitH - qrSize) / 2f - dp(4f)).roundToInt()
             canvas.drawRoundRect(RectF(qrLeft - dp(6f), qrTop - dp(6f), qrLeft + qrSize + dp(6f), qrTop + qrSize + dp(6f)), dp(8f), dp(8f), whiteFill)
             canvas.drawBitmap(qrBitmap, null, Rect(qrLeft, qrTop, qrLeft + qrSize, qrTop + qrSize), null)
 
-            val amtTag = if (due > 0.001) formatInr(due) else formatInr(bill.allTotal)
-            val qrAmtPaint = TextPaint(valPaint).apply { textSize = dp(14f); color = primaryColor }
+            val amtTag = when {
+                due > 0.001 -> formatInr(due)
+                hasSettlement -> if (isBengali) "সেটেল · ₹0" else "SETTLED · ₹0"
+                else -> if (isBengali) "পরিশোধিত · ₹0" else "PAID · ₹0"
+            }
+            val qrAmtPaint = TextPaint(valPaint).apply { textSize = dp(13.5f); color = if (due > 0.001) primaryColor else 0xFF15803D.toInt() }
             canvas.drawText(amtTag, qrRect.centerX() - qrAmtPaint.measureText(amtTag) / 2f, qrRect.bottom - dp(14f), qrAmtPaint)
         }
         y += splitH + dp(14f)
@@ -853,16 +943,18 @@ object BillDocumentEngine {
         val innerPad = dp(16f)
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
-        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeId = compactCustomerBarcodeId(bill.customerId).takeIf { it.isNotBlank() }
         val customerBarcodeBitmap = customerBarcodeId?.let {
             generateCode128BarcodeBitmap(
                 it,
-                widthPx = dp(420f).roundToInt().coerceAtLeast(360),
-                heightPx = dp(62f).roundToInt().coerceAtLeast(54)
+                widthPx = dp(460f).roundToInt().coerceAtLeast(320),
+                heightPx = dp(64f).roundToInt().coerceAtLeast(56)
             )
         }
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
+        val (actualCashPaid, settledWaived) = splitPaidAndSettled(payments, paid)
+        val hasSettlement = settledWaived > 0.001
         val paymentRowsCount = minOf(payments.size, 4)
 
         val primaryColor = design.primaryColorInt
@@ -882,10 +974,10 @@ object BillDocumentEngine {
         // Measure dynamic layout height
         var estH = outerPad * 2f
         estH += dp(122f) // Luminous light gradient header
-        if (customerBarcodeBitmap != null) estH += dp(12f) + dp(54f) // Compact Customer ID Barcode right after header
+        if (customerBarcodeBitmap != null) estH += dp(12f) + dp(80f) // Compact Customer ID Barcode right after header
         estH += dp(14f) + dp(156f) // Split 2-column Bill Meta + Customer Form Box
         estH += dp(14f) + if (hasLand) dp(184f) else dp(92f) // 2x2 Pastel Charge Tiles
-        estH += dp(14f) + if (qrBitmap != null) dp(216f) else dp(196f) // Side-by-side Payment Summary + QR
+        estH += dp(14f) + if (qrBitmap != null) dp(if (hasSettlement) 244f else 216f) else dp(if (hasSettlement) 224f else 196f) // Side-by-side Payment Summary + QR
         if (paymentRowsCount > 0) estH += dp(14f) + dp(46f) + paymentRowsCount * dp(28f)
         if (hasNote) estH += dp(12f) + dp(40f)
         estH += dp(16f) + dp(96f) // Handwritten signature + footer
@@ -1158,7 +1250,7 @@ object BillDocumentEngine {
         }
 
         // 4. Side-by-Side Payment Summary Box + Square UPI QR Card
-        val sumBlockH = if (qrBitmap != null) dp(212f) else dp(192f)
+        val sumBlockH = if (qrBitmap != null) dp(if (hasSettlement) 240f else 212f) else dp(if (hasSettlement) 220f else 192f)
         val sumW = if (qrBitmap != null) (availW - colGap) * 0.60f else availW
         val sumRect = RectF(outerPad, y, outerPad + sumW, y + sumBlockH)
         canvas.drawRoundRect(sumRect, dp(16f), dp(16f), whiteCardPaint)
@@ -1174,12 +1266,16 @@ object BillDocumentEngine {
             canvas.drawLine(sumRect.left + dp(14f), rowY + dp(10f), sumRect.right - dp(14f), rowY + dp(10f), hairlinePaint)
         }
 
-        var sy = sumRect.top + dp(54f)
+        var sy = sumRect.top + dp(52f)
         drawSumLine(sy, if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue))
-        sy += dp(32f)
+        sy += dp(30f)
         drawSumLine(sy, if (isBengali) "মোট মূল্য" else "Total Amount", formatInr(bill.allTotal))
-        sy += dp(32f)
-        drawSumLine(sy, if (isBengali) "জমা" else "Paid", formatInr(paid), vColor = 0xFF15803D.toInt())
+        sy += dp(30f)
+        drawSumLine(sy, if (isBengali) "জমা" else "Paid", formatInr(actualCashPaid), vColor = 0xFF15803D.toInt())
+        if (hasSettlement) {
+            sy += dp(30f)
+            drawSumLine(sy, if (isBengali) "ছাড় / সেটেল" else "Settled / Discount", formatInr(settledWaived), vColor = 0xFFB45309.toInt())
+        }
 
         // Highlighted Payable Due pill banner at bottom of summary card
         val duePillRect = RectF(
@@ -1301,13 +1397,19 @@ object BillDocumentEngine {
         val innerPad = dp(18f)
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
-        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeId = compactCustomerBarcodeId(bill.customerId).takeIf { it.isNotBlank() }
         val customerBarcodeBitmap = customerBarcodeId?.let {
-            generateCode128BarcodeBitmap(it, widthPx = dp(420f).roundToInt().coerceAtLeast(360), heightPx = dp(64f).roundToInt().coerceAtLeast(56))
+            generateCode128BarcodeBitmap(
+                it,
+                widthPx = dp(460f).roundToInt().coerceAtLeast(320),
+                heightPx = dp(64f).roundToInt().coerceAtLeast(56)
+            )
         }
         val isQrHero = design == BillDesignModel.QR_FOCUSED
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
+        val (actualCashPaid, settledWaived) = splitPaidAndSettled(payments, paid)
+        val hasSettlement = settledWaived > 0.001
         val paymentRowsCount = minOf(payments.size, 4)
 
         val primaryColor = design.primaryColorInt
@@ -1323,7 +1425,7 @@ object BillDocumentEngine {
         var estH = outerPad * 2f
         estH += if (isEmeraldPro) dp(154f) else dp(130f) // Top colored brand banner
         if (customerBarcodeBitmap != null) {
-            estH += dp(12f) + dp(54f) // Compact Customer ID barcode right after header
+            estH += dp(12f) + dp(80f) // Compact Customer ID barcode right after header
         }
         estH += dp(14f) + dp(72f) // Bill No & Date twin pills
         if (isQrHero && qrBitmap != null) {
@@ -1331,7 +1433,7 @@ object BillDocumentEngine {
         }
         estH += dp(14f) + dp(184f) // Customer Details card
         estH += dp(14f) + if (hasLand) dp(184f) else dp(104f) // Charge Details card
-        estH += dp(14f) + dp(186f) // Payment Summary tinted card
+        estH += dp(14f) + dp(if (hasSettlement) 218f else 186f) // Payment Summary tinted card
         if (paymentRowsCount > 0) estH += dp(14f) + dp(48f) + paymentRowsCount * dp(28f)
         if (hasNote) estH += dp(12f) + dp(44f)
         if (!isQrHero && qrBitmap != null) {
@@ -1671,7 +1773,7 @@ object BillDocumentEngine {
         y += chargeH + dp(14f)
 
         // 5. PAYMENT SUMMARY Mint/Accent Card
-        val paySumH = dp(186f)
+        val paySumH = dp(if (hasSettlement) 218f else 186f)
         val paySumRect = RectF(outerPad, y, w - outerPad, y + paySumH)
         val accentFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accentBg }
         val accentBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1684,13 +1786,17 @@ object BillDocumentEngine {
         canvas.drawRoundRect(paySumRect, dp(16f), dp(16f), accentBorderPaint)
         canvas.drawText(if (isBengali) "পেমেন্ট সারসংক্ষেপ" else "PAYMENT SUMMARY", paySumRect.left + dp(16f), paySumRect.top + dp(26f), sectionCapPaint)
 
-        var py = paySumRect.top + dp(58f)
+        var py = paySumRect.top + dp(56f)
         drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue), drawLine = false)
-        py += dp(34f)
+        py += dp(32f)
         drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "মোট মূল্য" else "Total Amount", formatInr(bill.allTotal), drawLine = false)
-        py += dp(34f)
-        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জমা" else "Paid", formatInr(paid), drawLine = false, vColor = 0xFF15803D.toInt())
-        py += dp(40f)
+        py += dp(32f)
+        drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "জমা" else "Paid", formatInr(actualCashPaid), drawLine = false, vColor = 0xFF15803D.toInt())
+        if (hasSettlement) {
+            py += dp(32f)
+            drawCardKeyVal(paySumRect.left, paySumRect.right, py, if (isBengali) "ছাড় / সেটেল" else "Settled / Discount", formatInr(settledWaived), drawLine = false, vColor = 0xFFB45309.toInt())
+        }
+        py += dp(38f)
 
         val dueTitlePaint = TextPaint(valPaint).apply { textSize = dp(20f) }
         val dueValPaint = TextPaint(valPaint).apply {
@@ -1711,14 +1817,16 @@ object BillDocumentEngine {
             canvas.drawText("RECENT PAYMENTS", rpRect.left + dp(16f), rpRect.top + dp(24f), sectionCapPaint)
             var ry = rpRect.top + dp(52f)
             payments.take(paymentRowsCount).forEachIndexed { idx, p ->
+                val isSetRow = PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT
+                val modeTxt = if (isSetRow) (if (isBengali) "সেটেল ছাড়" else "Settled / Discount") else p.mode
                 drawCardKeyVal(
                     rpRect.left,
                     rpRect.right,
                     ry,
-                    "${p.date} · ${p.mode}",
-                    "+${formatInr(p.amount)}",
+                    "${p.date} · $modeTxt",
+                    if (isSetRow) formatInr(p.amount) else "+${formatInr(p.amount)}",
                     drawLine = idx < paymentRowsCount - 1,
-                    vColor = 0xFF15803D.toInt()
+                    vColor = if (isSetRow) 0xFFB45309.toInt() else 0xFF15803D.toInt()
                 )
                 ry += dp(28f)
             }
@@ -1772,21 +1880,27 @@ object BillDocumentEngine {
         val isThermal = design == BillDesignModel.THERMAL_COMPACT
 
         val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
-        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeId = compactCustomerBarcodeId(bill.customerId).takeIf { it.isNotBlank() }
         val customerBarcodeBitmap = customerBarcodeId?.let {
-            generateCode128BarcodeBitmap(it, widthPx = dp(400f).roundToInt().coerceAtLeast(340), heightPx = dp(58f).roundToInt().coerceAtLeast(52))
+            generateCode128BarcodeBitmap(
+                it,
+                widthPx = dp(440f).roundToInt().coerceAtLeast(300),
+                heightPx = dp(60f).roundToInt().coerceAtLeast(54)
+            )
         }
         val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
         val hasNote = bill.note.isNotBlank()
+        val (actualCashPaid, settledWaived) = splitPaidAndSettled(payments, paid)
+        val hasSettlement = settledWaived > 0.001
         val paymentRowsCount = minOf(payments.size, 5)
 
         var estH = dp(220f)
         estH += dp(140f)
         estH += if (hasLand) dp(185f) else dp(92f)
-        estH += dp(155f)
+        estH += dp(if (hasSettlement) 186f else 155f)
         if (paymentRowsCount > 0) estH += dp(64f) + paymentRowsCount * dp(30f)
         if (qrBitmap != null) estH += dp(175f)
-        if (customerBarcodeBitmap != null) estH += dp(66f)
+        if (customerBarcodeBitmap != null) estH += dp(92f)
         if (hasNote) estH += dp(48f)
         estH += dp(115f) // Handwritten owner signature + date
         if (size.isFullA4) {
@@ -1957,7 +2071,7 @@ object BillDocumentEngine {
         drawKV(if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue))
 
         // Summary box
-        val sumH = dp(124f)
+        val sumH = dp(if (hasSettlement) 156f else 124f)
         val sumRect = RectF(pad, y, w - pad, y + sumH)
         val sumFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (isThermal) 0xFFF3F4F6.toInt() else accentBg }
         canvas.drawRoundRect(sumRect, dp(12f), dp(12f), sumFill)
@@ -1974,9 +2088,16 @@ object BillDocumentEngine {
             sy += dp(30f)
         }
         drawSumRow(if (isBengali) "মোট মূল্য" else "Grand Total", formatInr(bill.allTotal), primaryColor, big = true)
-        drawSumRow(if (isBengali) "জমা" else "Paid", formatInr(paid), 0xFF14764E.toInt())
+        drawSumRow(if (isBengali) "জমা" else "Paid", formatInr(actualCashPaid), 0xFF14764E.toInt())
+        if (hasSettlement) {
+            drawSumRow(
+                if (isBengali) "ছাড় / সেটেল" else "Settled / Discount",
+                formatInr(settledWaived),
+                if (isThermal) Color.BLACK else 0xFFB45309.toInt()
+            )
+        }
         drawSumRow(
-            if (isBengali) "মোট বাকি" else if (due > 0.001) "Balance Due" else "Paid in Full",
+            if (isBengali) "মোট বাকি" else if (due > 0.001) "Balance Due" else if (hasSettlement) "Settled Balance" else "Paid in Full",
             formatInr(due),
             dueColor,
             big = true
@@ -1989,7 +2110,9 @@ object BillDocumentEngine {
             canvas.drawLine(pad, y, w - pad, y, linePaint)
             y += dp(22f)
             payments.take(paymentRowsCount).forEach { p ->
-                canvas.drawText("${p.date} · ${p.mode}", pad, y, mutedPaint)
+                val isSetRow = PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT
+                val modeTxt = if (isSetRow) (if (isBengali) "সেটেল ছাড়" else "Settled") else p.mode
+                canvas.drawText("${p.date} · $modeTxt", pad, y, mutedPaint)
                 val rw = bodyBoldPaint.measureText(formatInr(p.amount))
                 canvas.drawText(formatInr(p.amount), w - pad - rw, y, bodyBoldPaint)
                 y += dp(24f)
@@ -2398,6 +2521,8 @@ object BillDocumentEngine {
         }
     }
 
+    private val shareScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     fun shareBillImageWithReminder(
         context: Context,
         settings: BusinessSettings,
@@ -2411,28 +2536,41 @@ object BillDocumentEngine {
         customQrPath: String,
         bengaliLabels: Boolean = false
     ) {
-        val uri = renderCachedBillImageUri(
-            context = context,
-            settings = settings,
-            bill = bill,
-            payments = payments,
-            paid = paid,
-            due = due,
-            design = design,
-            size = size,
-            qrMode = qrMode,
-            customQrPath = customQrPath,
-            bengaliLabels = bengaliLabels
-        )
-        val reminderMsg = buildBillReminderMessage(settings, bill, due)
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_TEXT, reminderMsg)
-            putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val appContext = context.applicationContext
+        shareScope.launch {
+            val uri = runCatching {
+                withContext(Dispatchers.IO) {
+                    renderCachedBillImageUri(
+                        context = appContext,
+                        settings = settings,
+                        bill = bill,
+                        payments = payments,
+                        paid = paid,
+                        due = due,
+                        design = design,
+                        size = size,
+                        qrMode = qrMode,
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliLabels
+                    )
+                }
+            }.getOrElse {
+                android.widget.Toast.makeText(appContext, "Could not prepare bill image", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val reminderMsg = buildBillReminderMessage(settings, bill, due)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, reminderMsg)
+                putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(shareIntent, "Share Bill Image & Reminder").apply {
+                if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(chooser) }
         }
-        context.startActivity(Intent.createChooser(shareIntent, "Share Bill Image & Reminder"))
     }
 
     fun sendBillImageReminderToWhatsApp(
@@ -2448,61 +2586,73 @@ object BillDocumentEngine {
         customQrPath: String = "",
         bengaliLabels: Boolean = false
     ) {
-        val uri = renderCachedBillImageUri(
-            context = context,
-            settings = settings,
-            bill = bill,
-            payments = payments,
-            paid = paid,
-            due = due,
-            design = design,
-            size = size,
-            qrMode = qrMode,
-            customQrPath = customQrPath,
-            bengaliLabels = bengaliLabels
-        )
-        val reminderMsg = buildBillReminderMessage(settings, bill, due)
-        val waDigits = InvoicePrinter.normalizeWhatsAppDigits(bill.phone)
-        val jid = if (waDigits.isNotBlank()) "$waDigits@s.whatsapp.net" else null
-
-        val baseIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_TEXT, reminderMsg)
-            putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
-            if (jid != null) {
-                putExtra("jid", jid)
+        val appContext = context.applicationContext
+        shareScope.launch {
+            val uri = runCatching {
+                withContext(Dispatchers.IO) {
+                    renderCachedBillImageUri(
+                        context = appContext,
+                        settings = settings,
+                        bill = bill,
+                        payments = payments,
+                        paid = paid,
+                        due = due,
+                        design = design,
+                        size = size,
+                        qrMode = qrMode,
+                        customQrPath = customQrPath,
+                        bengaliLabels = bengaliLabels
+                    )
+                }
+            }.getOrElse {
+                android.widget.Toast.makeText(appContext, "Could not prepare bill image", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
             }
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+            val reminderMsg = buildBillReminderMessage(settings, bill, due)
+            val waDigits = InvoicePrinter.normalizeWhatsAppDigits(bill.phone)
+            val jid = if (waDigits.isNotBlank()) "$waDigits@s.whatsapp.net" else null
 
-        val pm = context.packageManager
-        val waPackages = listOf("com.whatsapp", "com.whatsapp.w4b")
-        for (pkg in waPackages) {
-            val targeted = Intent(baseIntent).setPackage(pkg)
-            if (targeted.resolveActivity(pm) != null) {
-                runCatching {
-                    context.startActivity(targeted)
-                    return
+            val baseIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, reminderMsg)
+                putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
+                if (jid != null) {
+                    putExtra("jid", jid)
+                }
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            val pm = appContext.packageManager
+            val waPackages = listOf("com.whatsapp", "com.whatsapp.w4b")
+            for (pkg in waPackages) {
+                val targeted = Intent(baseIntent).setPackage(pkg)
+                if (targeted.resolveActivity(pm) != null) {
+                    val launched = runCatching { context.startActivity(targeted) }.isSuccess
+                    if (launched) return@launch
                 }
             }
-        }
 
-        if (waDigits.isBlank()) {
-            android.widget.Toast.makeText(
-                context,
-                "No phone number saved; choose app to share bill image",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
+            if (waDigits.isBlank()) {
+                android.widget.Toast.makeText(
+                    appContext,
+                    "No phone number saved; choose app to share bill image",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            val chooserIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, reminderMsg)
+                putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(chooserIntent, "Send Bill Image via WhatsApp").apply {
+                if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(chooser) }
         }
-        val chooserIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_TEXT, reminderMsg)
-            putExtra(Intent.EXTRA_SUBJECT, "Bill ${bill.billNo} - ${bill.customerName}")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(chooserIntent, "Send Bill Image via WhatsApp"))
     }
 
     private fun renderCachedBillImageUri(

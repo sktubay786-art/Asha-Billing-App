@@ -18,6 +18,7 @@ import com.example.data.model.PaymentMode
 import com.example.data.model.WbsedclBillPayment
 import com.example.data.model.WbsedclConsumer
 import com.example.data.model.calculateBigha
+import com.example.data.model.formatInr
 import com.example.data.model.roundMoney
 import com.example.data.model.todayIsoDate
 import com.example.util.SafeCalculator
@@ -46,7 +47,10 @@ data class CalculatorUiState(
     val expression: String = "",
     val historyLine: String = "",
     val display: String = "0",
-    val freshResult: Boolean = false
+    val livePreview: String = "",
+    val freshResult: Boolean = false,
+    val tape: List<Pair<String, String>> = emptyList(),
+    val memoryValue: Double = 0.0
 )
 
 class BillingViewModel(
@@ -603,6 +607,59 @@ class BillingViewModel(
         }
     }
 
+    fun settleBillWithDiscount(
+        bill: Bill,
+        cashReceived: Double,
+        currentDue: Double,
+        mode: PaymentMode,
+        receivedIn: String,
+        date: String,
+        note: String,
+        onSettled: () -> Unit
+    ) {
+        val cleanDue = roundMoney(currentDue)
+        val cleanCash = roundMoney(cashReceived)
+        if (cleanDue <= 0.001) {
+            _toastMessages.tryEmit("This bill is already paid")
+            return
+        }
+        if (cleanCash < 0.0 || cleanCash > cleanDue + 0.01) {
+            _toastMessages.tryEmit("Enter a settlement cash amount between ₹0 and ${formatInr(cleanDue)}")
+            return
+        }
+        val clampedCash = cleanCash.coerceAtMost(cleanDue)
+        val discountWaived = roundMoney((cleanDue - clampedCash).coerceAtLeast(0.0))
+
+        viewModelScope.launch {
+            _cloudStatus.value = "Settling bill…"
+            val result = repository.settleBillWithDiscount(
+                userId = currentUserId,
+                bill = bill,
+                cashReceived = clampedCash,
+                discountWaived = discountWaived,
+                mode = mode,
+                receivedIn = receivedIn,
+                date = date,
+                note = note
+            )
+            if (result.isSuccess) {
+                _cloudStatus.value = "Cloud synced"
+                val msg = if (discountWaived > 0.001) {
+                    "Settled ${bill.billNo}: Collected ${formatInr(clampedCash)} · Waived ${formatInr(discountWaived)} · Due ₹0"
+                } else {
+                    "Bill ${bill.billNo} fully paid (${formatInr(clampedCash)})"
+                }
+                _toastMessages.tryEmit(msg)
+                onSettled()
+            } else {
+                _cloudStatus.value = "Cloud save failed"
+                _toastMessages.tryEmit(
+                    result.exceptionOrNull()?.localizedMessage ?: "Failed to settle bill"
+                )
+            }
+        }
+    }
+
     fun updatePayment(
         original: Payment,
         amount: Double,
@@ -943,45 +1000,150 @@ class BillingViewModel(
 
     fun onCalcKey(key: String) {
         val current = _calcState.value
-        when (key) {
-            "AC" -> {
-                _calcState.value = CalculatorUiState()
+        val binaryOps = setOf("+", "−", "×", "÷", "%")
+
+        fun computeLivePreview(expr: String): String {
+            if (expr.isBlank()) return ""
+            val hasOp = expr.any { it in setOf('+', '−', '×', '÷', '%', '(') }
+            if (!hasOp) return ""
+            return try {
+                val value = SafeCalculator.evaluate(expr)
+                SafeCalculator.formatResult(value)
+            } catch (_: Exception) {
+                ""
             }
-            "⌫" -> {
-                val nextExpr = if (current.freshResult) "" else current.expression.dropLast(1)
-                _calcState.value = CalculatorUiState(
-                    expression = nextExpr,
-                    historyLine = if (current.freshResult) "" else current.historyLine,
-                    display = nextExpr.ifEmpty { "0" },
+        }
+
+        fun currentNumericValue(): Double? {
+            return try {
+                if (current.expression.isNotBlank()) {
+                    SafeCalculator.evaluate(current.expression)
+                } else {
+                    current.display.toDoubleOrNull()
+                }
+            } catch (_: Exception) {
+                current.livePreview.toDoubleOrNull() ?: current.display.toDoubleOrNull()
+            }
+        }
+
+        when {
+            key == "AC" -> {
+                _calcState.value = current.copy(
+                    expression = "",
+                    historyLine = "",
+                    display = "0",
+                    livePreview = "",
                     freshResult = false
                 )
             }
-            "=" -> {
+            key == "CLEAR_TAPE" -> {
+                _calcState.value = current.copy(tape = emptyList())
+            }
+            key == "MC" -> {
+                _calcState.value = current.copy(memoryValue = 0.0)
+            }
+            key == "MR" -> {
+                val formattedMem = SafeCalculator.formatResult(current.memoryValue)
+                val nextExpr = if (current.freshResult || current.expression.isBlank()) {
+                    formattedMem
+                } else if (current.expression.last().toString() in binaryOps || current.expression.last() == '(') {
+                    current.expression + formattedMem
+                } else {
+                    formattedMem
+                }
+                _calcState.value = current.copy(
+                    expression = nextExpr,
+                    display = nextExpr,
+                    livePreview = computeLivePreview(nextExpr),
+                    freshResult = false
+                )
+            }
+            key == "M+" -> {
+                val v = currentNumericValue() ?: return
+                _calcState.value = current.copy(memoryValue = roundMoney(current.memoryValue + v))
+            }
+            key == "M-" -> {
+                val v = currentNumericValue() ?: return
+                _calcState.value = current.copy(memoryValue = roundMoney(current.memoryValue - v))
+            }
+            key == "±" -> {
+                val v = currentNumericValue() ?: return
+                val negated = SafeCalculator.formatResult(-v)
+                _calcState.value = current.copy(
+                    expression = negated,
+                    display = negated,
+                    livePreview = "",
+                    freshResult = false
+                )
+            }
+            key.startsWith("USE:") -> {
+                val raw = key.removePrefix("USE:").trim()
+                if (raw.isEmpty()) return
+                val nextExpr = if (current.expression.isNotBlank() && !current.freshResult &&
+                    (current.expression.last().toString() in binaryOps || current.expression.last() == '(')
+                ) {
+                    current.expression + raw
+                } else {
+                    raw
+                }
+                _calcState.value = current.copy(
+                    expression = nextExpr,
+                    display = nextExpr,
+                    livePreview = computeLivePreview(nextExpr),
+                    freshResult = false
+                )
+            }
+            key == "⌫" -> {
+                val nextExpr = if (current.freshResult) "" else current.expression.dropLast(1)
+                _calcState.value = current.copy(
+                    expression = nextExpr,
+                    historyLine = if (current.freshResult) "" else current.historyLine,
+                    display = nextExpr.ifEmpty { "0" },
+                    livePreview = computeLivePreview(nextExpr),
+                    freshResult = false
+                )
+            }
+            key == "=" -> {
                 if (current.expression.isBlank()) return
                 try {
                     val value = SafeCalculator.evaluate(current.expression)
                     val formatted = SafeCalculator.formatResult(value)
-                    _calcState.value = CalculatorUiState(
+                    val updatedTape = (listOf(current.expression to formatted) + current.tape).take(12)
+                    _calcState.value = current.copy(
                         expression = formatted,
                         historyLine = "${current.expression} =",
                         display = formatted,
-                        freshResult = true
+                        livePreview = "",
+                        freshResult = true,
+                        tape = updatedTape
                     )
                 } catch (e: IllegalArgumentException) {
                     _calcState.value = current.copy(
                         display = e.message ?: "Error",
+                        livePreview = "",
                         freshResult = true
                     )
                 }
             }
             else -> {
-                val isOperator = key in setOf("+", "−", "×", "÷", "%")
+                val isOperator = key in binaryOps
                 val baseExpr = if (current.freshResult && !isOperator) "" else current.expression
-                val nextExpr = baseExpr + key
-                _calcState.value = CalculatorUiState(
+                val nextExpr = when {
+                    isOperator && baseExpr.isEmpty() -> {
+                        if (key == "−") "−" else return
+                    }
+                    isOperator && baseExpr.last().toString() in binaryOps -> {
+                        baseExpr.dropLast(1) + key
+                    }
+                    key == "00" && (baseExpr.isEmpty() || baseExpr == "0") -> "0"
+                    key == "." && baseExpr.takeLastWhile { it.isDigit() || it == '.' }.contains('.') -> baseExpr
+                    else -> baseExpr + key
+                }
+                _calcState.value = current.copy(
                     expression = nextExpr,
                     historyLine = if (current.freshResult && !isOperator) "" else current.historyLine,
-                    display = nextExpr,
+                    display = nextExpr.ifEmpty { "0" },
+                    livePreview = computeLivePreview(nextExpr),
                     freshResult = false
                 )
             }
