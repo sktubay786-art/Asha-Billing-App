@@ -63,9 +63,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -76,12 +76,12 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.BillingDashboardData
 import com.example.data.model.Customer
+import com.example.data.model.PaymentMode
 import com.example.data.model.formatInr
 import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AnimatedCurrencyText
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BillRowItem
-import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.components.PremiumBillIcon
 import com.example.ui.components.PremiumCalculatorIcon
@@ -90,14 +90,15 @@ import com.example.ui.components.PremiumHistoryIcon
 import com.example.ui.components.PremiumPayIcon
 import com.example.ui.components.PremiumUserIcon
 import com.example.ui.components.PulsingLiveDot
+import com.example.ui.components.SettledSummaryBannerCard
 import com.example.ui.components.StaggeredPremiumReveal
+import com.example.ui.components.TopDueFollowUpCard
 import com.example.ui.theme.AmberBadgeBg
 import com.example.ui.theme.AmberBadgeFg
 import com.example.ui.theme.BmwMetricNumberStyle
 import com.example.ui.theme.BmwTelemetryStyle
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
-import com.example.ui.theme.EmeraldMint
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.PaidBadgeBg
 import com.example.ui.theme.PaidBadgeFg
@@ -176,12 +177,40 @@ fun OverviewScreen(
         }
     }
 
-    val totalBilled = filteredBills.sumOf { it.allTotal }
-    val totalCollected = filteredBills.sumOf { data.paidForBill(it.id) }
-    val totalDue = if (selectedSeason == "All seasons") {
-        filteredCustomers.sumOf { data.dueForCustomer(it.id) }
-    } else {
-        filteredBills.sumOf { data.dueForBill(it) }
+    val filteredBillIds = remember(filteredBills) { filteredBills.map { it.id }.toSet() }
+    val filteredPayments = remember(data.payments, filteredBillIds, filteredCustomerIds, selectedVillage, selectedSeason) {
+        if (selectedVillage == "All villages" && selectedSeason == "All seasons") {
+            data.payments
+        } else {
+            data.payments.filter { p ->
+                p.billId in filteredBillIds ||
+                    (selectedSeason == "All seasons" && p.customerId in filteredCustomerIds)
+            }
+        }
+    }
+
+    val totalBilled = remember(filteredBills) { filteredBills.sumOf { it.allTotal } }
+    val totalCollected = remember(filteredBills, data) { filteredBills.sumOf { data.paidForBill(it.id) } }
+    val settledStats = remember(filteredPayments) {
+        var amount = 0.0
+        var count = 0
+        filteredPayments.forEach { p ->
+            if (PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT) {
+                amount += p.amount
+                count += 1
+            }
+        }
+        amount to count
+    }
+    val totalSettled = settledStats.first
+    val settledCount = settledStats.second
+
+    val totalDue = remember(filteredCustomers, filteredBills, selectedSeason, data) {
+        if (selectedSeason == "All seasons") {
+            filteredCustomers.sumOf { data.dueForCustomer(it.id) }
+        } else {
+            filteredBills.sumOf { data.dueForBill(it) }
+        }
     }
     val collectionRatio = if (totalBilled > 0.0) (totalCollected / totalBilled).toFloat().coerceIn(0f, 1f) else 0f
     val animatedCollectionRatio by animateFloatAsState(
@@ -189,7 +218,14 @@ fun OverviewScreen(
         animationSpec = spring(stiffness = Spring.StiffnessLow),
         label = "overview_collection_ratio"
     )
-    val recentBills = filteredBills.sortedByDescending { it.date }.take(5)
+    val recentBills = remember(filteredBills) { filteredBills.sortedByDescending { it.date }.take(5) }
+    val topDueCustomers = remember(filteredCustomers, data) {
+        filteredCustomers
+            .map { customer -> customer to data.dueForCustomer(customer.id) }
+            .filter { it.second > 0.001 }
+            .sortedByDescending { it.second }
+            .take(3)
+    }
 
     val villageSummaries = remember(data.customers, data.bills, data.payments) {
         data.customers
@@ -424,37 +460,44 @@ fun OverviewScreen(
             }
         }
 
-        // V103 2x2 KPI Cards
+        // V103 KPI Deck + Settled Amount Banner
         item {
             StaggeredPremiumReveal(index = 1) {
-            if (isWideLayout) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
-                    V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
-                    V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
-                    V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-                }
-            } else {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
-                        V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
+                    if (isWideLayout) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
+                            V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
+                            V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
+                            V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            V103KpiCard("Total Bill", formatInr(totalBilled), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f), currencyAmount = totalBilled)
+                            V103KpiCard("Collected", formatInr(totalCollected), PaidBadgeFg, Modifier.weight(1f), currencyAmount = totalCollected)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
+                            V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                        }
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        V103KpiCard("Total Due", formatInr(max(0.0, totalDue)), if (totalDue > 0.001) CrimsonDue else PaidBadgeFg, Modifier.weight(1f), currencyAmount = max(0.0, totalDue))
-                        V103KpiCard("Customers", filteredCustomers.size.toString(), MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-                    }
+
+                    SettledSummaryBannerCard(
+                        settledAmount = totalSettled,
+                        settledCount = settledCount,
+                        totalCollected = totalCollected,
+                        onOpenHistory = onViewHistory
+                    )
                 }
-            }
             }
         }
 
@@ -662,7 +705,7 @@ fun OverviewScreen(
                     V103ActionTile(
                         icon = Icons.Rounded.ElectricBolt,
                         badgeColor = Color(0xFFD97706),
-                        title = "Electricity Bill",
+                        title = "Electricity",
                         subtitle = if (data.wbsedclConsumers.isNotEmpty()) {
                             "WBSEDCL · ${data.wbsedclConsumers.size} IDs"
                         } else {
@@ -677,7 +720,7 @@ fun OverviewScreen(
                     V103ActionTile(
                         icon = Icons.Rounded.Calculate,
                         badgeColor = Color(0xFFFF9500),
-                        title = "ASHA Calculator",
+                        title = "Calculator",
                         subtitle = "Land & Rate math",
                         customLeading = { PremiumCalculatorIcon(size = 40.dp, active = true) },
                         onClick = onOpenCalculator,
@@ -687,6 +730,17 @@ fun OverviewScreen(
                     )
                 }
             }
+            }
+        }
+
+        // Priority Follow-Up: Top 3 Pending Due Customers with 1-Tap Call / WhatsApp / Chat
+        if (topDueCustomers.isNotEmpty()) {
+            item {
+                TopDueFollowUpCard(
+                    topDueCustomers = topDueCustomers,
+                    onOpenCustomerChat = onOpenCustomerChat,
+                    onOpenAllUsers = onOpenUsers
+                )
             }
         }
 
@@ -1033,12 +1087,15 @@ private fun V103ActionTile(
         onClick = onClick,
         interactionSource = interactionSource,
         modifier = modifier
-            .scale(pressScale)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .height(106.dp),
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = if (isPressed) 1.dp else 3.dp
+        shadowElevation = 2.dp
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             Canvas(modifier = Modifier.matchParentSize()) {
@@ -1069,7 +1126,9 @@ private fun V103ActionTile(
                         text = title,
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = subtitle,

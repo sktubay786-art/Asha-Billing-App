@@ -72,12 +72,14 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,6 +88,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -93,6 +96,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -147,19 +152,12 @@ fun AshaPanelCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = 0.86f,
-                    stiffness = Spring.StiffnessMediumLow
-                )
-            ),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         tonalElevation = 1.5.dp,
-        shadowElevation = 3.dp
+        shadowElevation = 2.dp
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -669,11 +667,20 @@ fun InvoiceDetailDialog(
         mutableStateOf(BillPrintSize.fromLabel(initialPrintSizeLabel))
     }
 
-    val qrBitmap = remember(data.settings, due, qrMode, customQrPath) {
-        BillDocumentEngine.resolveQrBitmap(data.settings, due, qrMode, customQrPath)
+    val qrBitmap by produceState<android.graphics.Bitmap?>(
+        initialValue = null,
+        data.settings,
+        due,
+        qrMode,
+        customQrPath
+    ) {
+        value = withContext(Dispatchers.Default) {
+            BillDocumentEngine.resolveQrBitmap(data.settings, due, qrMode, customQrPath)
+        }
     }
 
-    val previewBitmap = remember(
+    val previewImageState by produceState<Pair<ImageBitmap, Float>?>(
+        initialValue = null,
         bill,
         data.settings,
         payments,
@@ -685,18 +692,26 @@ fun InvoiceDetailDialog(
         customQrPath,
         bengaliMode
     ) {
-        BillDocumentEngine.renderBillBitmap(
-            settings = data.settings,
-            bill = bill,
-            payments = payments,
-            paid = paid,
-            due = due,
-            design = selectedDesign,
-            size = selectedSize,
-            qrMode = qrMode,
-            customQrPath = customQrPath,
-            bengaliLabels = bengaliMode
-        )
+        value = withContext(Dispatchers.Default) {
+            val previewRenderSize = if (selectedSize.widthPx > BillPrintSize.THERMAL_80.widthPx) {
+                BillPrintSize.THERMAL_80
+            } else {
+                selectedSize
+            }
+            val bmp = BillDocumentEngine.renderBillBitmap(
+                settings = data.settings,
+                bill = bill,
+                payments = payments,
+                paid = paid,
+                due = due,
+                design = selectedDesign,
+                size = previewRenderSize,
+                qrMode = qrMode,
+                customQrPath = customQrPath,
+                bengaliLabels = bengaliMode
+            )
+            bmp.asImageBitmap() to (bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
+        }
     }
 
     val pdfSaverLauncher = rememberLauncherForActivityResult(
@@ -727,13 +742,26 @@ fun InvoiceDetailDialog(
         }
     }
 
+    fun renderFullExportBitmap(): android.graphics.Bitmap = BillDocumentEngine.renderBillBitmap(
+        settings = data.settings,
+        bill = bill,
+        payments = payments,
+        paid = paid,
+        due = due,
+        design = selectedDesign,
+        size = selectedSize,
+        qrMode = qrMode,
+        customQrPath = customQrPath,
+        bengaliLabels = bengaliMode
+    )
+
     val pngSaverLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("image/png")
     ) { uri ->
         if (uri != null) {
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
-                    BillDocumentEngine.writeBillPngToStream(out, previewBitmap)
+                    BillDocumentEngine.writeBillPngToStream(out, renderFullExportBitmap())
                 }
             }.onSuccess {
                 Toast.makeText(context, "Image saved", Toast.LENGTH_SHORT).show()
@@ -1088,16 +1116,27 @@ fun InvoiceDetailDialog(
                             shadowElevation = 4.dp,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            val ratio = previewBitmap.width.toFloat() / previewBitmap.height.toFloat()
-                            Image(
-                                bitmap = previewBitmap.asImageBitmap(),
-                                contentDescription = "Bill Print Sheet Preview",
-                                contentScale = ContentScale.FillWidth,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(ratio)
-                                    .testTag("bill_preview_image")
-                            )
+                            val rendered = previewImageState
+                            if (rendered != null) {
+                                Image(
+                                    bitmap = rendered.first,
+                                    contentDescription = "Bill Print Sheet Preview",
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(rendered.second)
+                                        .testTag("bill_preview_image")
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(260.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(strokeWidth = 2.5.dp)
+                                }
+                            }
                         }
                     } else {
                         // High-Fidelity iOS Wallet Pass Card
@@ -1248,7 +1287,7 @@ fun InvoiceDetailDialog(
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                     BillDocumentEngine.saveBillPngToDownloads(
                                         context = context,
-                                        bitmap = previewBitmap,
+                                        bitmap = renderFullExportBitmap(),
                                         bill = bill
                                     ).onSuccess {
                                         Toast.makeText(context, "Saved PNG to Downloads/ASHA_Bills", Toast.LENGTH_SHORT).show()
@@ -1825,12 +1864,18 @@ private fun IosWalletBillPassCard(
                 }
                 // Compact 1D Code 128 Barcode for Customer ID (fast camera lookup)
                 val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
-                val customerBarcodeBitmap = remember(customerBarcodeId) {
-                    customerBarcodeId?.let {
-                        BillDocumentEngine.generateCode128BarcodeBitmap(it, widthPx = 560, heightPx = 92)
+                val customerBarcodeImg by produceState<ImageBitmap?>(
+                    initialValue = null,
+                    customerBarcodeId
+                ) {
+                    value = customerBarcodeId?.let { id ->
+                        withContext(Dispatchers.Default) {
+                            BillDocumentEngine.generateCode128BarcodeBitmap(id, widthPx = 560, heightPx = 92)
+                                ?.asImageBitmap()
+                        }
                     }
                 }
-                if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+                if (customerBarcodeImg != null && customerBarcodeId != null) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = Color.White,
@@ -1845,7 +1890,7 @@ private fun IosWalletBillPassCard(
                             verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Image(
-                                bitmap = customerBarcodeBitmap.asImageBitmap(),
+                                bitmap = customerBarcodeImg!!,
                                 contentDescription = "Customer ID Barcode",
                                 contentScale = ContentScale.FillBounds,
                                 modifier = Modifier
@@ -2042,10 +2087,11 @@ fun QuickReceivePaymentDialog(
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
+        ProvideSafeTextToolbar {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface
+            ) {
             Column(
                 modifier = Modifier
                     .padding(20.dp)
@@ -2260,6 +2306,7 @@ fun QuickReceivePaymentDialog(
                 }
             }
         }
+        }
     }
 
     if (showDatePicker) {
@@ -2382,10 +2429,11 @@ fun EditBillDialog(
         onDismissRequest = onDismiss,
         title = { Text("Fix / Edit ${bill.billNo}") },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            ProvideSafeTextToolbar {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                 Text(
                     text = "${bill.customerName} · ${bill.phone}",
                     style = MaterialTheme.typography.bodySmall,
@@ -2443,6 +2491,20 @@ fun EditBillDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("খরা", "বর্ষা", "আমন", "বোরো", "রবি").forEach { option ->
+                        FilterChip(
+                            selected = season == option,
+                            onClick = { season = option },
+                            label = { Text(option, fontSize = 12.sp) }
+                        )
+                    }
+                }
     var showDatePicker by remember { mutableStateOf(false) }
                 OutlinedTextField(
                     value = date,
@@ -2496,6 +2558,7 @@ fun EditBillDialog(
                     }
                 }
             }
+            }
         },
         confirmButton = {
             Button(
@@ -2540,10 +2603,11 @@ fun EditPaymentDialog(
         onDismissRequest = onDismiss,
         title = { Text("Fix Payment ($billNo)") },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            ProvideSafeTextToolbar {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it },
@@ -2608,6 +2672,7 @@ fun EditPaymentDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+            }
         },
         confirmButton = {
             Button(
@@ -2637,6 +2702,14 @@ fun PrintSizePickerDialog(
     onSizeSelected: (BillPrintSize) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val haptics = LocalAshaHaptics.current
+    val printerPrefs = remember(context) {
+        com.example.security.AppPreferencesStore(context.applicationContext).state.value
+    }
+    val hasDirectThermal = remember(printerPrefs) {
+        com.example.util.ThermalPrinterManager.isConfigured(printerPrefs)
+    }
     var chosenSize by remember(initialSize) {
         mutableStateOf(
             if (initialSize == BillPrintSize.A4_QUARTER || initialSize == BillPrintSize.A4_HALF) {
@@ -2689,6 +2762,62 @@ fun PrintSizePickerDialog(
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.close))
+                    }
+                }
+
+                if (hasDirectThermal) {
+                    val directSize = if (printerPrefs.printerPaperWidth == com.example.security.ThermalPaperWidth.MM_58) {
+                        BillPrintSize.THERMAL_58
+                    } else {
+                        BillPrintSize.THERMAL_80
+                    }
+                    Surface(
+                        onClick = {
+                            haptics.confirm()
+                            onSizeSelected(directSize)
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0xFF0EA5E9).copy(alpha = 0.12f),
+                        border = BorderStroke(1.5.dp, Color(0xFF0EA5E9)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("direct_thermal_print_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Direct Thermal Print",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFF0284C7)
+                                )
+                                Text(
+                                    text = com.example.util.ThermalPrinterManager.configuredSummary(printerPrefs),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF0284C7)
+                            ) {
+                                Text(
+                                    text = "PRINT NOW",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
                     }
                 }
 

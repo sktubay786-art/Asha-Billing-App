@@ -577,39 +577,25 @@ private fun PremiumSquircleShell(
     content: @Composable () -> Unit
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (active) 1.09f else 1.0f,
+        targetValue = if (active) 1.07f else 1.0f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
+            stiffness = Spring.StiffnessMedium
         ),
         label = "premium_squircle_scale"
     )
-    val shadowElev by animateDpAsState(
-        targetValue = if (active) 6.dp else 1.5.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "premium_squircle_shadow"
-    )
-    val topColor by animateColorAsState(
-        targetValue = if (active) activeColors[0] else inactiveColors[0],
-        label = "premium_squircle_top"
-    )
-    val midColor by animateColorAsState(
-        targetValue = if (active) activeColors[1] else inactiveColors[1],
-        label = "premium_squircle_mid"
-    )
-    val bottomColor by animateColorAsState(
-        targetValue = if (active) activeColors[2] else inactiveColors[2],
-        label = "premium_squircle_bot"
-    )
+    val palette = if (active) activeColors else inactiveColors
     val shape = RoundedCornerShape(size * 0.30f)
 
     Box(
         modifier = modifier
-            .scale(scale)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .size(size)
-            .shadow(elevation = shadowElev, shape = shape, clip = false)
             .clip(shape)
-            .background(Brush.verticalGradient(listOf(topColor, midColor, bottomColor)))
+            .background(Brush.verticalGradient(palette))
             .border(
                 width = if (active) 0.95.dp else 0.55.dp,
                 brush = Brush.verticalGradient(
@@ -627,7 +613,7 @@ private fun PremiumSquircleShell(
             drawRoundRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = if (active) 0.32f else 0.14f),
+                        Color.White.copy(alpha = if (active) 0.30f else 0.14f),
                         Color.Transparent
                     ),
                     startY = 0f,
@@ -1150,7 +1136,7 @@ fun PremiumElectricIcon(
 }
 
 /**
- * Staggered spring entrance reveal for premium dashboard cards and screen sections.
+ * Ultra-lightweight GPU-only entrance reveal (zero layout re-measure or scroll jank).
  */
 @Composable
 fun StaggeredPremiumReveal(
@@ -1159,24 +1145,21 @@ fun StaggeredPremiumReveal(
     content: @Composable () -> Unit
 ) {
     val alphaAnim = remember { Animatable(0f) }
-    val slideAnim = remember { Animatable(22f) }
+    val slideAnim = remember { Animatable(12f) }
 
     LaunchedEffect(Unit) {
-        val staggerMs = (index.coerceIn(0, 6)) * 42L
+        val staggerMs = (index.coerceIn(0, 3)) * 28L
         if (staggerMs > 0L) delay(staggerMs)
         launch {
             alphaAnim.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing)
             )
         }
         launch {
             slideAnim.animateTo(
                 targetValue = 0f,
-                animationSpec = spring(
-                    dampingRatio = 0.82f,
-                    stiffness = Spring.StiffnessMediumLow
-                )
+                animationSpec = tween(durationMillis = 210, easing = FastOutSlowInEasing)
             )
         }
     }
@@ -1192,7 +1175,7 @@ fun StaggeredPremiumReveal(
 }
 
 /**
- * Breathing live telemetry dot with an expanding soft radial pulse halo.
+ * Luminous double-halo live telemetry dot (zero idle CPU/GPU frame drain).
  */
 @Composable
 fun PulsingLiveDot(
@@ -1200,36 +1183,15 @@ fun PulsingLiveDot(
     size: Dp = 8.dp,
     modifier: Modifier = Modifier
 ) {
-    val infinite = rememberInfiniteTransition(label = "live_dot_pulse")
-    val pulseScale by infinite.animateFloat(
-        initialValue = 1f,
-        targetValue = 2.1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulse_scale"
-    )
-    val pulseAlpha by infinite.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pulse_alpha"
-    )
-
     Box(
-        modifier = modifier.size(size * 1.9f),
+        modifier = modifier.size(size * 1.8f),
         contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
-                .size(size)
-                .scale(pulseScale)
+                .size(size * 1.75f)
                 .clip(CircleShape)
-                .background(color.copy(alpha = pulseAlpha))
+                .background(color.copy(alpha = 0.26f))
         )
         Box(
             modifier = Modifier
@@ -1241,24 +1203,13 @@ fun PulsingLiveDot(
 }
 
 /**
- * Animated BMW 3-color precision telemetry hairline with a sleek traveling light glint.
+ * Metallic BMW 3-color precision telemetry hairline with crisp specular highlight (0% idle GPU load).
  */
 @Composable
 fun AnimatedBmwPrecisionStripe(
     modifier: Modifier = Modifier,
     height: Dp = 2.5.dp
 ) {
-    val shimmerTransition = rememberInfiniteTransition(label = "bmw_stripe_shimmer")
-    val shimmerPos by shimmerTransition.animateFloat(
-        initialValue = -0.35f,
-        targetValue = 1.35f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "bmw_shimmer_x"
-    )
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -1266,21 +1217,19 @@ fun AnimatedBmwPrecisionStripe(
             .clip(RoundedCornerShape(height))
     ) {
         BmwPrecisionStripe(height = height)
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width * shimmerPos
-            val glintW = size.width * 0.26f
-            drawRect(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        Color.White.copy(alpha = 0.65f),
-                        Color.Transparent
-                    ),
-                    startX = cx - glintW / 2f,
-                    endX = cx + glintW / 2f
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = 0.36f),
+                            Color.Transparent
+                        )
+                    )
                 )
-            )
-        }
+        )
     }
 }
 
@@ -1298,7 +1247,7 @@ fun AnimatedCurrencyText(
 ) {
     val animatedVal by animateFloatAsState(
         targetValue = amount.toFloat(),
-        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
         label = "animated_inr_value"
     )
     Text(

@@ -101,8 +101,11 @@ import com.example.ui.theme.EmeraldMint
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.PaidBadgeBg
 import com.example.ui.theme.PaidBadgeFg
+import androidx.compose.material.icons.rounded.TableView
+import com.example.ui.components.LocalAshaHaptics
 import com.example.util.BillDesignModel
 import com.example.util.BillPrintSize
+import com.example.util.CsvReportExportDialog
 import com.example.util.InvoicePrinter
 
 private enum class BillSortOption(val label: String) {
@@ -130,6 +133,7 @@ fun HistoryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptics = LocalAshaHaptics.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Bills, 1 = Payments, 2 = Village Due
     var selectedStatus by remember { mutableStateOf<BillStatus?>(null) }
@@ -137,6 +141,7 @@ fun HistoryScreen(
     var selectedSort by remember { mutableStateOf(BillSortOption.NEWEST) }
     var selectedPaymentMode by remember { mutableStateOf("All Modes") }
     var expandedVillage by remember { mutableStateOf<String?>(null) }
+    var showCsvExportDialog by remember { mutableStateOf(false) }
 
     val billMap = remember(data.bills) { data.bills.associateBy { it.id } }
     val customerMap = remember(data.customers) { data.customers.associateBy { it.id } }
@@ -311,13 +316,16 @@ fun HistoryScreen(
                         }
 
                         Surface(
-                            onClick = onOpenExpenses,
+                            onClick = {
+                                haptics.tap()
+                                onOpenExpenses()
+                            },
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.testTag("history_expenses_chip")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -325,12 +333,41 @@ fun HistoryScreen(
                                     imageVector = Icons.Rounded.AccountBalanceWallet,
                                     contentDescription = "Expenses",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(15.dp)
                                 )
                                 Text(
                                     text = "Cost",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+
+                        Surface(
+                            onClick = {
+                                haptics.tap()
+                                showCsvExportDialog = true
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            color = EmeraldPrimary.copy(alpha = 0.14f),
+                            modifier = Modifier.testTag("history_csv_export_chip")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.TableView,
+                                    contentDescription = "Export CSV Report",
+                                    tint = EmeraldPrimary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "CSV",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = EmeraldPrimary,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                             }
@@ -1004,6 +1041,13 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+
+    if (showCsvExportDialog) {
+        CsvReportExportDialog(
+            data = data,
+            onDismiss = { showCsvExportDialog = false }
+        )
     }
 }
 

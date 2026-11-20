@@ -74,13 +74,6 @@ enum class BillDesignModel(
         secondaryColorInt = 0xFF1E3A8A.toInt(),
         accentBgInt = 0xFFEFF6FF.toInt()
     ),
-    ROSE_VELVET(
-        label = "Ruby Velvet Executive",
-        tagline = "Rich velvet plum-crimson card with warm rose summary",
-        primaryColorInt = 0xFF9F1239.toInt(),
-        secondaryColorInt = 0xFF4C0519.toInt(),
-        accentBgInt = 0xFFFFF1F2.toInt()
-    ),
     BENGALI_HERITAGE(
         label = "Bengali Heritage Gold",
         tagline = "Bengali-first formal headers with heritage gold trim",
@@ -122,6 +115,41 @@ enum class BillDesignModel(
         primaryColorInt = 0xFF6D28D9.toInt(),
         secondaryColorInt = 0xFF4C1D95.toInt(),
         accentBgInt = 0xFFF5F3FF.toInt()
+    ),
+    SAKURA_IVORY(
+        label = "Sakura Ivory Light",
+        tagline = "Blush rose & pearl white editorial form with pastel tiles",
+        primaryColorInt = 0xFFBE185D.toInt(),
+        secondaryColorInt = 0xFFFCE7F3.toInt(),
+        accentBgInt = 0xFFFFF1F5.toInt()
+    ),
+    SKY_PEARL(
+        label = "Sky Pearl Modern",
+        tagline = "Airy glacier-blue & pearl light atelier form with 2x2 grid",
+        primaryColorInt = 0xFF0369A1.toInt(),
+        secondaryColorInt = 0xFFE0F2FE.toInt(),
+        accentBgInt = 0xFFF0F9FF.toInt()
+    ),
+    MARIGOLD_CREAM(
+        label = "Marigold Cream Form",
+        tagline = "Warm sunlit ivory & saffron pastel form for crisp printing",
+        primaryColorInt = 0xFFB45309.toInt(),
+        secondaryColorInt = 0xFFFEF3C7.toInt(),
+        accentBgInt = 0xFFFFFBEB.toInt()
+    ),
+    PLATINUM_LEDGER(
+        label = "Platinum Ledger Pro",
+        tagline = "New structured accounting table, top barcode & split UPI ledger",
+        primaryColorInt = 0xFF1E3A8A.toInt(),
+        secondaryColorInt = 0xFF0F172A.toInt(),
+        accentBgInt = 0xFFEFF6FF.toInt()
+    ),
+    EMERALD_LEDGER(
+        label = "Emerald Ledger Elite",
+        tagline = "New structured emerald letterhead, itemized table & split QR",
+        primaryColorInt = 0xFF065F46.toInt(),
+        secondaryColorInt = 0xFF022C22.toInt(),
+        accentBgInt = 0xFFECFDF5.toInt()
     );
 
     companion object {
@@ -294,12 +322,38 @@ object BillDocumentEngine {
             BillDesignModel.ROYAL_GOLD,
             BillDesignModel.MIDNIGHT_PREMIUM,
             BillDesignModel.SAPPHIRE_GLASS,
-            BillDesignModel.ROSE_VELVET,
             BillDesignModel.BENGALI_HERITAGE,
             BillDesignModel.QR_FOCUSED,
             BillDesignModel.IMPERIAL_TEAL,
             BillDesignModel.SUNSET_SAFFRON,
             BillDesignModel.AMETHYST_LUXE -> renderSectionedCardStyle(
+                settings = settings,
+                bill = bill,
+                payments = payments,
+                paid = paid,
+                due = due,
+                design = design,
+                size = size,
+                qrMode = qrMode,
+                customQrPath = customQrPath,
+                isBengali = useBengali
+            )
+            BillDesignModel.SAKURA_IVORY,
+            BillDesignModel.SKY_PEARL,
+            BillDesignModel.MARIGOLD_CREAM -> renderLightAtelierStyle(
+                settings = settings,
+                bill = bill,
+                payments = payments,
+                paid = paid,
+                due = due,
+                design = design,
+                size = size,
+                qrMode = qrMode,
+                customQrPath = customQrPath,
+                isBengali = useBengali
+            )
+            BillDesignModel.PLATINUM_LEDGER,
+            BillDesignModel.EMERALD_LEDGER -> renderExecutiveLedgerFormStyle(
                 settings = settings,
                 bill = bill,
                 payments = payments,
@@ -324,6 +378,904 @@ object BillDocumentEngine {
                 isBengali = useBengali
             )
         }
+    }
+
+    /**
+     * Draws a sleek, ultra-compact 1D Code 128 Customer ID barcode strip positioned right after the
+     * bill header so it stays completely separate from the square Payment UPI QR at the bottom.
+     */
+    private fun drawCompactTopCustomerBarcodeBar(
+        canvas: Canvas,
+        left: Float,
+        right: Float,
+        topY: Float,
+        dp: (Float) -> Float,
+        barcodeBitmap: Bitmap,
+        customerId: String,
+        primaryColor: Int,
+        mutedColor: Int,
+        borderPaint: Paint,
+        fillPaint: Paint? = null
+    ): Float {
+        val barCardH = dp(52f)
+        val rect = RectF(left, topY, right, topY + barCardH)
+        if (fillPaint != null) {
+            canvas.drawRoundRect(rect, dp(12f), dp(12f), fillPaint)
+        }
+        canvas.drawRoundRect(rect, dp(12f), dp(12f), borderPaint)
+
+        // Left: Compact ID label & code
+        val capPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            textSize = dp(10f)
+            letterSpacing = 0.08f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val idValPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = mutedColor
+            textSize = dp(12.5f)
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        }
+        canvas.drawText("CUSTOMER ID", rect.left + dp(14f), rect.top + dp(21f), capPaint)
+        canvas.drawText(customerId.take(20), rect.left + dp(14f), rect.top + dp(39f), idValPaint)
+
+        // Right: Crisp compact horizontal 1D Code 128 barcode
+        val bW = dp(230f).roundToInt()
+        val bH = dp(34f).roundToInt()
+        val bRight = (rect.right - dp(12f)).roundToInt()
+        val bLeft = (bRight - bW).coerceAtLeast((rect.centerX() - dp(10f)).roundToInt())
+        val bTop = (rect.top + (barCardH - bH) / 2f).roundToInt()
+        canvas.drawBitmap(barcodeBitmap, null, Rect(bLeft, bTop, bRight, bTop + bH), null)
+
+        return topY + barCardH + dp(12f)
+    }
+
+    /**
+     * Brand-new Executive Ledger Accounting Sheet Structure (Platinum Ledger Pro & Emerald Ledger Elite):
+     * Centered royal letterhead -> Compact top Bill Meta + Customer Barcode band -> Customer Profile strip ->
+     * Formal 4-column Accounting Ledger Table -> Bottom split Payment Receipt + Square UPI QR -> Signature.
+     */
+    private fun renderExecutiveLedgerFormStyle(
+        settings: BusinessSettings,
+        bill: Bill,
+        payments: List<Payment>,
+        paid: Double,
+        due: Double,
+        design: BillDesignModel,
+        size: BillPrintSize,
+        qrMode: String,
+        customQrPath: String,
+        isBengali: Boolean
+    ): Bitmap {
+        val w = size.widthPx
+        val scale = w / 680f
+        fun dp(v: Float) = v * scale
+        val outerPad = dp(24f)
+
+        val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
+        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeBitmap = customerBarcodeId?.let {
+            generateCode128BarcodeBitmap(
+                it,
+                widthPx = dp(360f).roundToInt().coerceAtLeast(300),
+                heightPx = dp(52f).roundToInt().coerceAtLeast(44)
+            )
+        }
+        val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
+        val hasNote = bill.note.isNotBlank()
+        val paymentRowsCount = minOf(payments.size, 3)
+
+        val primaryColor = design.primaryColorInt
+        val secondaryColor = design.secondaryColorInt
+        val accentBg = design.accentBgInt
+        val goldAccent = 0xFFD97706.toInt()
+        val inkColor = 0xFF0F172A.toInt()
+        val mutedColor = 0xFF475569.toInt()
+        val ruleColor = 0xFFCBD5E1.toInt()
+        val dueColor = if (due > 0.001) 0xFFDC2626.toInt() else 0xFF15803D.toInt()
+
+        var estH = outerPad * 2f
+        estH += dp(138f) // Centered Executive Crown Letterhead
+        estH += dp(12f) + dp(72f) // Meta + Compact Barcode top strip
+        estH += dp(12f) + dp(104f) // Horizontal 2x2 Customer Info band
+        estH += dp(14f) + dp(196f) // Formal 4-column Ledger Table + Totals row
+        estH += dp(14f) + if (qrBitmap != null) dp(210f) else dp(170f) // Bottom Split Payment Summary + UPI QR
+        if (hasNote) estH += dp(10f) + dp(34f)
+        estH += dp(14f) + dp(96f) // Handwritten Signature + footer
+        if (size.isFullA4) {
+            estH = max(estH, w * 1.38f)
+        }
+
+        val h = estH.roundToInt().coerceAtLeast(780)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.WHITE)
+
+        // Crisp double executive stationery border
+        val outerStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = primaryColor
+            strokeWidth = dp(2.2f)
+        }
+        val innerStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = goldAccent
+            alpha = 135
+            strokeWidth = dp(0.9f)
+        }
+        canvas.drawRoundRect(RectF(dp(9f), dp(9f), w - dp(9f), h - dp(9f)), dp(16f), dp(16f), outerStroke)
+        canvas.drawRoundRect(RectF(dp(14f), dp(14f), w - dp(14f), h - dp(14f)), dp(12f), dp(12f), innerStroke)
+
+        val capPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            textSize = dp(11.5f)
+            letterSpacing = 0.08f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val labelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = mutedColor
+            textSize = dp(13f)
+        }
+        val valPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = inkColor
+            textSize = dp(14.5f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val tableBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = ruleColor
+            strokeWidth = dp(1.2f)
+        }
+        val accentFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accentBg }
+        val primaryFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = primaryColor }
+        val whiteFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+
+        var y = outerPad
+
+        // 1. Centered Royal Letterhead Header
+        val headerH = dp(136f)
+        val headerRect = RectF(outerPad, y, w - outerPad, y + headerH)
+        val headerBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                headerRect.left,
+                headerRect.top,
+                headerRect.right,
+                headerRect.bottom,
+                secondaryColor,
+                primaryColor,
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRoundRect(headerRect, dp(14f), dp(14f), headerBg)
+
+        // Top & bottom thin champagne gold accent rules inside letterhead
+        val goldRule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFBBF24.toInt()
+            strokeWidth = dp(2.2f)
+        }
+        canvas.drawLine(headerRect.left + dp(20f), headerRect.top + dp(10f), headerRect.right - dp(20f), headerRect.top + dp(10f), goldRule)
+        canvas.drawLine(headerRect.left + dp(20f), headerRect.bottom - dp(10f), headerRect.right - dp(20f), headerRect.bottom - dp(10f), goldRule)
+
+        // Centered Micro-Header + Centered Company Name + Centered Contact
+        val microPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFDE68A.toInt()
+            textSize = dp(10.5f)
+            letterSpacing = 0.16f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val microText = if (isBengali) "অফিশিয়াল বিল লেজার" else "OFFICIAL BILLING LEDGER"
+        canvas.drawText(microText, headerRect.centerX() - microPaint.measureText(microText) / 2f, headerRect.top + dp(32f), microPaint)
+
+        val heroTitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = dp(28f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val companyName = settings.company.ifBlank { "আশা মিনি শ্যালো" }
+        canvas.drawText(companyName, headerRect.centerX() - heroTitlePaint.measureText(companyName) / 2f, headerRect.top + dp(68f), heroTitlePaint)
+
+        val subHeaderPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFE2E8F0.toInt()
+            textSize = dp(13f)
+        }
+        if (settings.address.isNotBlank()) {
+            val addr = settings.address.take(56)
+            canvas.drawText(addr, headerRect.centerX() - subHeaderPaint.measureText(addr) / 2f, headerRect.top + dp(93f), subHeaderPaint)
+        }
+        val contactStrip = listOfNotNull(
+            settings.contact.takeIf { it.isNotBlank() }?.let { "Ph: $it" },
+            settings.upi.takeIf { it.isNotBlank() }?.let { "UPI: $it" }
+        ).joinToString("  •  ")
+        if (contactStrip.isNotBlank()) {
+            canvas.drawText(contactStrip, headerRect.centerX() - subHeaderPaint.measureText(contactStrip) / 2f, headerRect.top + dp(115f), subHeaderPaint)
+        }
+
+        // Top-right status stamp pill
+        val stampTxt = if (due <= 0.001) (if (isBengali) "পরিশোধিত" else "PAID") else (if (isBengali) "বকেয়া" else "DUE")
+        val stampPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (due <= 0.001) 0xFF064E3B.toInt() else 0xFF7F1D1D.toInt()
+            textSize = dp(10.5f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val stampW = stampPaint.measureText(stampTxt) + dp(18f)
+        val stampRect = RectF(headerRect.right - dp(16f) - stampW, headerRect.top + dp(18f), headerRect.right - dp(16f), headerRect.top + dp(39f))
+        val stampBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (due <= 0.001) 0xFFA7F3D0.toInt() else 0xFFFECACA.toInt()
+        }
+        canvas.drawRoundRect(stampRect, dp(10f), dp(10f), stampBg)
+        canvas.drawText(stampTxt, stampRect.left + dp(9f), stampRect.top + dp(14.5f), stampPaint)
+
+        y += headerH + dp(12f)
+
+        // 2. Top Meta & Compact Customer Barcode Band (Separated from Bottom QR!)
+        val metaH = dp(70f)
+        val metaRect = RectF(outerPad, y, w - outerPad, y + metaH)
+        canvas.drawRoundRect(metaRect, dp(12f), dp(12f), accentFill)
+        canvas.drawRoundRect(metaRect, dp(12f), dp(12f), tableBorderPaint)
+
+        // Left side: Bill No & Date stacked cleanly
+        val metaLeftW = if (customerBarcodeBitmap != null) (metaRect.width() * 0.50f) else metaRect.width()
+        canvas.drawText(if (isBengali) "বিল নং" else "BILL NO.", metaRect.left + dp(14f), metaRect.top + dp(23f), capPaint)
+        canvas.drawText(bill.billNo.ifBlank { "ASHA" }, metaRect.left + dp(14f), metaRect.top + dp(43f), valPaint)
+
+        val dateColX = metaRect.left + metaLeftW * 0.52f
+        canvas.drawText(if (isBengali) "তারিখ" else "DATE", dateColX, metaRect.top + dp(23f), capPaint)
+        canvas.drawText(bill.date, dateColX, metaRect.top + dp(43f), valPaint)
+        if (bill.season.isNotBlank()) {
+            val seasonTiny = TextPaint(labelPaint).apply { textSize = dp(11.5f) }
+            canvas.drawText("${if (isBengali) "সিজন" else "Season"}: ${bill.season.take(22)}", metaRect.left + dp(14f), metaRect.bottom - dp(8f), seasonTiny)
+        }
+
+        // Right side: Compact 1D Customer ID Barcode
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            val divX = metaRect.left + metaLeftW
+            canvas.drawLine(divX, metaRect.top + dp(10f), divX, metaRect.bottom - dp(10f), tableBorderPaint)
+            val bW = (metaRect.right - divX - dp(24f)).roundToInt().coerceAtLeast(120)
+            val bH = dp(36f).roundToInt()
+            val bLeft = (divX + (metaRect.right - divX - bW) / 2f).roundToInt()
+            val bTop = (metaRect.top + dp(10f)).roundToInt()
+            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(bLeft, bTop, bLeft + bW, bTop + bH), null)
+            val cidPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = mutedColor
+                textSize = dp(10.5f)
+                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            }
+            val cidTxt = "ID: $customerBarcodeId"
+            canvas.drawText(cidTxt, divX + (metaRect.right - divX - cidPaint.measureText(cidTxt)) / 2f, metaRect.bottom - dp(9f), cidPaint)
+        }
+        y += metaH + dp(12f)
+
+        // 3. Horizontal Customer Profile Strip (2x2 Grid)
+        val custH = dp(102f)
+        val custRect = RectF(outerPad, y, w - outerPad, y + custH)
+        canvas.drawRoundRect(custRect, dp(12f), dp(12f), whiteFill)
+        canvas.drawRoundRect(custRect, dp(12f), dp(12f), tableBorderPaint)
+        canvas.drawText(if (isBengali) "গ্রাহকের বিবরণ" else "CUSTOMER ACCOUNT", custRect.left + dp(14f), custRect.top + dp(22f), capPaint)
+        canvas.drawLine(custRect.left, custRect.top + dp(30f), custRect.right, custRect.top + dp(30f), tableBorderPaint)
+
+        val midX = custRect.centerX()
+        val cRow1 = custRect.top + dp(56f)
+        val cRow2 = custRect.top + dp(84f)
+        canvas.drawText("${if (isBengali) "নাম" else "Name"}: ${bill.customerName.take(22)}", custRect.left + dp(14f), cRow1, valPaint)
+        canvas.drawText("${if (isBengali) "ফোন" else "Phone"}: ${bill.phone.ifBlank { "—" }}", midX + dp(8f), cRow1, valPaint)
+        canvas.drawText("${if (isBengali) "গ্রাম" else "Village"}: ${bill.village.ifBlank { "—" }}", custRect.left + dp(14f), cRow2, labelPaint)
+        canvas.drawText("${if (isBengali) "ঠিকানা" else "Address"}: ${bill.address.take(24).ifBlank { "—" }}", midX + dp(8f), cRow2, labelPaint)
+        y += custH + dp(14f)
+
+        // 4. Formal 4-Column Accounting Ledger Table (Brand-New Structure!)
+        val tableH = dp(192f)
+        val tableRect = RectF(outerPad, y, w - outerPad, y + tableH)
+        canvas.drawRoundRect(tableRect, dp(12f), dp(12f), whiteFill)
+
+        // Table Header Bar
+        val tHeadH = dp(36f)
+        val tHeadRect = RectF(tableRect.left, tableRect.top, tableRect.right, tableRect.top + tHeadH)
+        canvas.save()
+        val headClip = Path().apply { addRoundRect(tableRect, dp(12f), dp(12f), Path.Direction.CW) }
+        canvas.clipPath(headClip)
+        canvas.drawRect(tHeadRect, primaryFill)
+        canvas.restore()
+
+        val col1X = tableRect.left + dp(12f)
+        val col2X = tableRect.left + tableRect.width() * 0.44f
+        val col3X = tableRect.left + tableRect.width() * 0.66f
+        val col4Right = tableRect.right - dp(12f)
+
+        val thPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = dp(11.5f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText(if (isBengali) "বিবরণ" else "PARTICULARS", col1X, tableRect.top + dp(23f), thPaint)
+        canvas.drawText(if (isBengali) "জমির পরিমাণ" else "LAND / QTY", col2X + dp(6f), tableRect.top + dp(23f), thPaint)
+        canvas.drawText(if (isBengali) "রেট" else "RATE", col3X + dp(6f), tableRect.top + dp(23f), thPaint)
+        val amtHead = if (isBengali) "টাকা" else "AMOUNT"
+        canvas.drawText(amtHead, col4Right - thPaint.measureText(amtHead), tableRect.top + dp(23f), thPaint)
+
+        // Vertical column dividers inside table body
+        val bodyBottom = tableRect.bottom - dp(44f)
+        canvas.drawLine(col2X, tableRect.top + tHeadH, col2X, bodyBottom, tableBorderPaint)
+        canvas.drawLine(col3X, tableRect.top + tHeadH, col3X, bodyBottom, tableBorderPaint)
+        canvas.drawLine(tableRect.left + tableRect.width() * 0.80f, tableRect.top + tHeadH, tableRect.left + tableRect.width() * 0.80f, bodyBottom, tableBorderPaint)
+
+        // Row 1: Current Charge / Season Irrigation
+        val r1Y = tableRect.top + tHeadH + dp(34f)
+        val r1LineY = tableRect.top + tHeadH + dp(56f)
+        if (hasLand) {
+            val desc = if (isBengali) "বর্তমান বিল (${bill.season.ifBlank { "সিজন" }})" else "Current Bill (${bill.season.ifBlank { "Season" }})"
+            canvas.drawText(desc.take(26), col1X, r1Y, valPaint)
+            val qtyStr = "${String.format(Locale.US, "%.2f", bill.bigha)} Bigha"
+            val qtySub = "${formatQty(bill.landAmount)} ${bill.unit}"
+            canvas.drawText(qtyStr, col2X + dp(6f), r1Y - dp(6f), valPaint)
+            val tinyPaint = TextPaint(labelPaint).apply { textSize = dp(11f) }
+            canvas.drawText(qtySub, col2X + dp(6f), r1Y + dp(12f), tinyPaint)
+            canvas.drawText(formatInr(bill.rate), col3X + dp(6f), r1Y, valPaint)
+            val curStr = formatInr(bill.current)
+            canvas.drawText(curStr, col4Right - valPaint.measureText(curStr), r1Y, valPaint)
+        } else {
+            canvas.drawText(if (isBengali) "জের বাকি হিসাব" else "Previous Due Recovery", col1X, r1Y, valPaint)
+            canvas.drawText("—", col2X + dp(6f), r1Y, labelPaint)
+            canvas.drawText("—", col3X + dp(6f), r1Y, labelPaint)
+            val z = formatInr(0.0)
+            canvas.drawText(z, col4Right - valPaint.measureText(z), r1Y, labelPaint)
+        }
+        canvas.drawLine(tableRect.left, r1LineY, tableRect.right, r1LineY, tableBorderPaint)
+
+        // Row 2: Previous Due Brought Forward
+        val r2Y = r1LineY + dp(34f)
+        canvas.drawText(if (isBengali) "জের বাকি (পূর্বের বকেয়া)" else "Previous Due Brought Forward", col1X, r2Y, labelPaint)
+        canvas.drawText("—", col2X + dp(6f), r2Y, labelPaint)
+        canvas.drawText("—", col3X + dp(6f), r2Y, labelPaint)
+        val prevStr = formatInr(bill.previousDue)
+        canvas.drawText(prevStr, col4Right - valPaint.measureText(prevStr), r2Y, valPaint)
+
+        // Footer Total Bar inside table
+        val totRect = RectF(tableRect.left, bodyBottom, tableRect.right, tableRect.bottom)
+        canvas.save()
+        canvas.clipPath(headClip)
+        canvas.drawRect(totRect, accentFill)
+        canvas.restore()
+        canvas.drawLine(tableRect.left, bodyBottom, tableRect.right, bodyBottom, tableBorderPaint)
+
+        val totTitlePaint = TextPaint(valPaint).apply {
+            textSize = dp(16f)
+            color = primaryColor
+        }
+        canvas.drawText(if (isBengali) "মোট মূল্য (TOTAL AMOUNT)" else "TOTAL AMOUNT", col1X, bodyBottom + dp(28f), totTitlePaint)
+        val totValStr = formatInr(bill.allTotal)
+        canvas.drawText(totValStr, col4Right - totTitlePaint.measureText(totValStr), bodyBottom + dp(28f), totTitlePaint)
+
+        canvas.drawRoundRect(tableRect, dp(12f), dp(12f), tableBorderPaint)
+        y += tableH + dp(14f)
+
+        // 5. Bottom Split Block: Left = Payment Receipt & Balance Due, Right = Square UPI QR (Far from top barcode!)
+        val splitH = if (qrBitmap != null) dp(206f) else dp(166f)
+        val gap = dp(12f)
+        val availW = w - outerPad * 2f
+        val leftW = if (qrBitmap != null) (availW - gap) * 0.58f else availW
+        val payRect = RectF(outerPad, y, outerPad + leftW, y + splitH)
+        canvas.drawRoundRect(payRect, dp(14f), dp(14f), whiteFill)
+        canvas.drawRoundRect(payRect, dp(14f), dp(14f), tableBorderPaint)
+
+        canvas.drawText(if (isBengali) "পেমেন্ট সারসংক্ষেপ" else "SETTLEMENT LEDGER", payRect.left + dp(14f), payRect.top + dp(24f), capPaint)
+
+        // Paid Received row
+        val paidPaint = TextPaint(valPaint).apply { color = 0xFF15803D.toInt(); textSize = dp(16f) }
+        canvas.drawText(if (isBengali) "জমা (Paid)" else "Paid Received", payRect.left + dp(14f), payRect.top + dp(54f), labelPaint)
+        val paidStr = formatInr(paid)
+        canvas.drawText(paidStr, payRect.right - dp(14f) - paidPaint.measureText(paidStr), payRect.top + dp(54f), paidPaint)
+
+        // Recent payments compact lines (up to 3)
+        var py = payRect.top + dp(78f)
+        if (paymentRowsCount > 0) {
+            val miniPaint = TextPaint(labelPaint).apply { textSize = dp(11.5f) }
+            payments.take(paymentRowsCount).forEach { p ->
+                canvas.drawText("${p.date} · ${p.mode}", payRect.left + dp(14f), py, miniPaint)
+                val pAmt = "+${formatInr(p.amount)}"
+                val pGreen = TextPaint(miniPaint).apply { color = 0xFF15803D.toInt(); typeface = Typeface.DEFAULT_BOLD }
+                canvas.drawText(pAmt, payRect.right - dp(14f) - pGreen.measureText(pAmt), py, pGreen)
+                py += dp(20f)
+            }
+        }
+
+        // High-contrast Payable Due box anchored at bottom of left card
+        val dueBoxRect = RectF(payRect.left + dp(12f), payRect.bottom - dp(52f), payRect.right - dp(12f), payRect.bottom - dp(12f))
+        canvas.drawRoundRect(dueBoxRect, dp(10f), dp(10f), accentFill)
+        val dueLblPaint = TextPaint(valPaint).apply { textSize = dp(15.5f) }
+        val dueValPaint = TextPaint(valPaint).apply { textSize = dp(19f); color = dueColor }
+        canvas.drawText(if (isBengali) "মোট বাকি" else "Payable Due", dueBoxRect.left + dp(12f), dueBoxRect.top + dp(26f), dueLblPaint)
+        val dueStr = formatInr(due)
+        canvas.drawText(dueStr, dueBoxRect.right - dp(12f) - dueValPaint.measureText(dueStr), dueBoxRect.top + dp(27f), dueValPaint)
+
+        // Right: Framed Square UPI QR Card
+        if (qrBitmap != null) {
+            val qrRect = RectF(payRect.right + gap, y, w - outerPad, y + splitH)
+            canvas.drawRoundRect(qrRect, dp(14f), dp(14f), accentFill)
+            canvas.drawRoundRect(qrRect, dp(14f), dp(14f), tableBorderPaint)
+
+            val qrTitle = if (isBengali) "স্ক্যান ও পে (UPI)" else "SCAN & PAY UPI"
+            canvas.drawText(qrTitle, qrRect.centerX() - capPaint.measureText(qrTitle) / 2f, qrRect.top + dp(24f), capPaint)
+
+            val qrSize = dp(122f).roundToInt()
+            val qrLeft = (qrRect.centerX() - qrSize / 2f).roundToInt()
+            val qrTop = (qrRect.top + dp(34f)).roundToInt()
+            canvas.drawRoundRect(RectF(qrLeft - dp(6f), qrTop - dp(6f), qrLeft + qrSize + dp(6f), qrTop + qrSize + dp(6f)), dp(8f), dp(8f), whiteFill)
+            canvas.drawBitmap(qrBitmap, null, Rect(qrLeft, qrTop, qrLeft + qrSize, qrTop + qrSize), null)
+
+            val amtTag = if (due > 0.001) formatInr(due) else formatInr(bill.allTotal)
+            val qrAmtPaint = TextPaint(valPaint).apply { textSize = dp(14f); color = primaryColor }
+            canvas.drawText(amtTag, qrRect.centerX() - qrAmtPaint.measureText(amtTag) / 2f, qrRect.bottom - dp(14f), qrAmtPaint)
+        }
+        y += splitH + dp(14f)
+
+        if (hasNote) {
+            canvas.drawText("Note: ${bill.note.take(58)}", outerPad + dp(6f), y + dp(16f), labelPaint)
+            y += dp(32f)
+        }
+
+        drawHandwrittenOwnerSignatureSection(
+            canvas = canvas,
+            left = outerPad,
+            right = w - outerPad,
+            topY = y,
+            dp = { dp(it) },
+            settings = settings,
+            billDate = bill.date,
+            primaryColor = primaryColor,
+            mutedColor = mutedColor
+        )
+
+        return bitmap
+    }
+
+    /**
+     * Brand-new Light Atelier Editorial Form layout for Sakura Ivory, Sky Pearl, and Marigold Cream:
+     * Airy tinted pastel paper, ink-friendly luminous light header with dark crisp typography,
+     * ornamental corner brackets, 2-column Bill Meta + Customer split box, 2x2 pastel metric tiles,
+     * and side-by-side Payment Summary + Square UPI QR card.
+     */
+    private fun renderLightAtelierStyle(
+        settings: BusinessSettings,
+        bill: Bill,
+        payments: List<Payment>,
+        paid: Double,
+        due: Double,
+        design: BillDesignModel,
+        size: BillPrintSize,
+        qrMode: String,
+        customQrPath: String,
+        isBengali: Boolean
+    ): Bitmap {
+        val w = size.widthPx
+        val scale = w / 680f
+        fun dp(v: Float) = v * scale
+        val outerPad = dp(24f)
+        val innerPad = dp(16f)
+
+        val qrBitmap = resolveQrBitmap(settings, due, qrMode, customQrPath)
+        val customerBarcodeId = bill.customerId.trim().takeIf { it.isNotBlank() && it != "preview" }
+        val customerBarcodeBitmap = customerBarcodeId?.let {
+            generateCode128BarcodeBitmap(
+                it,
+                widthPx = dp(420f).roundToInt().coerceAtLeast(360),
+                heightPx = dp(62f).roundToInt().coerceAtLeast(54)
+            )
+        }
+        val hasLand = bill.landAmount > 0.001 || bill.rate > 0.001
+        val hasNote = bill.note.isNotBlank()
+        val paymentRowsCount = minOf(payments.size, 4)
+
+        val primaryColor = design.primaryColorInt
+        val pastelEnd = design.secondaryColorInt
+        val accentBg = design.accentBgInt
+        val paperBg = when (design) {
+            BillDesignModel.SAKURA_IVORY -> 0xFFFFFDFD.toInt()
+            BillDesignModel.SKY_PEARL -> 0xFFF9FCFF.toInt()
+            BillDesignModel.MARIGOLD_CREAM -> 0xFFFFFDF7.toInt()
+            else -> Color.WHITE
+        }
+        val inkColor = 0xFF0F172A.toInt()
+        val mutedColor = 0xFF64748B.toInt()
+        val cardBorder = 0xFFE2E8F0.toInt()
+        val dueColor = if (due > 0.001) 0xFFDC2626.toInt() else 0xFF15803D.toInt()
+
+        // Measure dynamic layout height
+        var estH = outerPad * 2f
+        estH += dp(122f) // Luminous light gradient header
+        if (customerBarcodeBitmap != null) estH += dp(12f) + dp(54f) // Compact Customer ID Barcode right after header
+        estH += dp(14f) + dp(156f) // Split 2-column Bill Meta + Customer Form Box
+        estH += dp(14f) + if (hasLand) dp(184f) else dp(92f) // 2x2 Pastel Charge Tiles
+        estH += dp(14f) + if (qrBitmap != null) dp(216f) else dp(196f) // Side-by-side Payment Summary + QR
+        if (paymentRowsCount > 0) estH += dp(14f) + dp(46f) + paymentRowsCount * dp(28f)
+        if (hasNote) estH += dp(12f) + dp(40f)
+        estH += dp(16f) + dp(96f) // Handwritten signature + footer
+        if (size.isFullA4) {
+            estH = max(estH, w * 1.38f)
+        }
+
+        val h = estH.roundToInt().coerceAtLeast(760)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(paperBg)
+
+        // Subtle outer pastel hairline frame + L-shaped editorial corner accents
+        val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = primaryColor
+            alpha = 85
+            strokeWidth = dp(1.6f)
+        }
+        canvas.drawRoundRect(RectF(dp(10f), dp(10f), w - dp(10f), h - dp(10f)), dp(20f), dp(20f), framePaint)
+
+        val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = primaryColor
+            strokeWidth = dp(3.2f)
+            strokeCap = Paint.Cap.ROUND
+        }
+        val cLen = dp(20f)
+        val cOff = dp(10f)
+        // Top-left & Top-right & Bottom-left & Bottom-right brackets
+        canvas.drawLine(cOff, cOff + cLen, cOff, cOff + dp(6f), cornerPaint)
+        canvas.drawLine(cOff + dp(6f), cOff, cOff + cLen, cOff, cornerPaint)
+        canvas.drawLine(w - cOff - cLen, cOff, w - cOff - dp(6f), cOff, cornerPaint)
+        canvas.drawLine(w - cOff, cOff + dp(6f), w - cOff, cOff + cLen, cornerPaint)
+        canvas.drawLine(cOff, h - cOff - cLen, cOff, h - cOff - dp(6f), cornerPaint)
+        canvas.drawLine(cOff + dp(6f), h - cOff, cOff + cLen, h - cOff, cornerPaint)
+        canvas.drawLine(w - cOff - cLen, h - cOff, w - cOff - dp(6f), h - cOff, cornerPaint)
+        canvas.drawLine(w - cOff, h - cOff - cLen, w - cOff, h - cOff - dp(6f), cornerPaint)
+
+        // Typography paints
+        val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = inkColor
+            textSize = dp(26f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val subPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF334155.toInt()
+            textSize = dp(13.5f)
+        }
+        val capPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            textSize = dp(12f)
+            letterSpacing = 0.08f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val labelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = mutedColor
+            textSize = dp(13.5f)
+        }
+        val valPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = inkColor
+            textSize = dp(15.5f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val whiteCardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        val pastelCardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accentBg }
+        val softBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = cardBorder
+            strokeWidth = dp(1.3f)
+        }
+        val accentBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = primaryColor
+            alpha = 95
+            strokeWidth = dp(1.4f)
+        }
+        val hairlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFF1F5F9.toInt()
+            strokeWidth = dp(1.1f)
+        }
+
+        var y = outerPad
+
+        // 1. Luminous Light Pastel Gradient Header (printer-friendly, ultra-crisp dark text)
+        val headerH = dp(120f)
+        val headerRect = RectF(outerPad, y, w - outerPad, y + headerH)
+        val headerGradPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                headerRect.left,
+                headerRect.top,
+                headerRect.right,
+                headerRect.bottom,
+                accentBg,
+                pastelEnd,
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRoundRect(headerRect, dp(18f), dp(18f), headerGradPaint)
+        canvas.drawRoundRect(headerRect, dp(18f), dp(18f), accentBorderPaint)
+
+        // Subtle decorative translucent orb inside header right
+        canvas.save()
+        val clipPath = Path().apply { addRoundRect(headerRect, dp(18f), dp(18f), Path.Direction.CW) }
+        canvas.clipPath(clipPath)
+        val orbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            alpha = 20
+        }
+        canvas.drawCircle(headerRect.right - dp(24f), headerRect.top + dp(16f), dp(74f), orbPaint)
+        // Left vertical accent stripe
+        val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = primaryColor }
+        canvas.drawRect(headerRect.left, headerRect.top, headerRect.left + dp(7f), headerRect.bottom, barPaint)
+        canvas.restore()
+
+        // High-contrast status capsule
+        val badgeText = when {
+            due <= 0.001 -> if (isBengali) "পরিশোধিত" else "PAID"
+            isBengali -> "বিল রশিদ"
+            else -> "OFFICIAL BILL"
+        }
+        val badgeTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = dp(11f)
+            letterSpacing = 0.05f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val badgeW = badgeTextPaint.measureText(badgeText) + dp(22f)
+        val badgeH = dp(24f)
+        val badgeRect = RectF(
+            headerRect.right - innerPad - badgeW,
+            headerRect.top + dp(14f),
+            headerRect.right - innerPad,
+            headerRect.top + dp(14f) + badgeH
+        )
+        canvas.drawRoundRect(badgeRect, dp(12f), dp(12f), barPaint)
+        canvas.drawText(badgeText, badgeRect.left + dp(11f), badgeRect.top + dp(16f), badgeTextPaint)
+
+        val companyName = settings.company.ifBlank { "আশা মিনি শ্যালো" }
+        canvas.drawText(companyName, headerRect.left + dp(20f), headerRect.top + dp(40f), titlePaint)
+        if (settings.address.isNotBlank()) {
+            canvas.drawText(settings.address.take(52), headerRect.left + dp(20f), headerRect.top + dp(66f), subPaint)
+        }
+        val contactLine = listOfNotNull(
+            settings.contact.takeIf { it.isNotBlank() }?.let { "Ph: $it" },
+            settings.upi.takeIf { it.isNotBlank() }?.let { "UPI: $it" }
+        ).joinToString("  •  ")
+        if (contactLine.isNotBlank()) {
+            canvas.drawText(contactLine, headerRect.left + dp(20f), headerRect.top + dp(94f), subPaint)
+        }
+        y += headerH + dp(12f)
+
+        // Compact 1D Customer ID Barcode right after header (completely separate from bottom Payment QR)
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            y = drawCompactTopCustomerBarcodeBar(
+                canvas = canvas,
+                left = outerPad,
+                right = w - outerPad,
+                topY = y,
+                dp = { dp(it) },
+                barcodeBitmap = customerBarcodeBitmap,
+                customerId = customerBarcodeId,
+                primaryColor = primaryColor,
+                mutedColor = mutedColor,
+                borderPaint = softBorderPaint,
+                fillPaint = whiteCardPaint
+            )
+        }
+
+        // 2. Two-Column Split Form Box: Left = Bill Meta (40%), Right = Customer Profile (60%)
+        val colGap = dp(12f)
+        val availW = w - outerPad * 2f
+        val leftColW = (availW - colGap) * 0.40f
+        val rightColW = (availW - colGap) * 0.60f
+        val splitH = dp(154f)
+
+        val metaRect = RectF(outerPad, y, outerPad + leftColW, y + splitH)
+        canvas.drawRoundRect(metaRect, dp(16f), dp(16f), pastelCardPaint)
+        canvas.drawRoundRect(metaRect, dp(16f), dp(16f), accentBorderPaint)
+
+        canvas.drawText(if (isBengali) "বিল তথ্য" else "INVOICE META", metaRect.left + dp(14f), metaRect.top + dp(24f), capPaint)
+        canvas.drawText(if (isBengali) "বিল নং" else "Bill Number", metaRect.left + dp(14f), metaRect.top + dp(48f), labelPaint)
+        canvas.drawText(bill.billNo.ifBlank { "ASHA" }, metaRect.left + dp(14f), metaRect.top + dp(68f), valPaint)
+        canvas.drawLine(metaRect.left + dp(14f), metaRect.top + dp(80f), metaRect.right - dp(14f), metaRect.top + dp(80f), hairlinePaint)
+        canvas.drawText(if (isBengali) "তারিখ" else "Bill Date", metaRect.left + dp(14f), metaRect.top + dp(100f), labelPaint)
+        canvas.drawText(bill.date, metaRect.left + dp(14f), metaRect.top + dp(120f), valPaint)
+        if (bill.season.isNotBlank()) {
+            val sPillPaint = TextPaint(capPaint).apply { textSize = dp(11f) }
+            canvas.drawText(
+                "${if (isBengali) "সিজন" else "Season"}: ${bill.season.take(18)}",
+                metaRect.left + dp(14f),
+                metaRect.top + dp(142f),
+                sPillPaint
+            )
+        }
+
+        val custRect = RectF(metaRect.right + colGap, y, w - outerPad, y + splitH)
+        canvas.drawRoundRect(custRect, dp(16f), dp(16f), whiteCardPaint)
+        canvas.drawRoundRect(custRect, dp(16f), dp(16f), softBorderPaint)
+        canvas.drawText(if (isBengali) "গ্রাহকের বিবরণ" else "BILLED TO", custRect.left + dp(14f), custRect.top + dp(24f), capPaint)
+        val custNamePaint = TextPaint(valPaint).apply { textSize = dp(18f) }
+        canvas.drawText(bill.customerName.take(24), custRect.left + dp(14f), custRect.top + dp(52f), custNamePaint)
+
+        val phoneTxt = "${if (isBengali) "ফোন" else "Phone"}: ${bill.phone.ifBlank { "—" }}"
+        val villTxt = "${if (isBengali) "গ্রাম" else "Village"}: ${bill.village.ifBlank { "—" }}"
+        val addrTxt = "${if (isBengali) "ঠিকানা" else "Address"}: ${bill.address.take(26).ifBlank { "—" }}"
+        canvas.drawText(phoneTxt, custRect.left + dp(14f), custRect.top + dp(80f), subPaint)
+        canvas.drawText(villTxt, custRect.left + dp(14f), custRect.top + dp(104f), subPaint)
+        canvas.drawText(addrTxt, custRect.left + dp(14f), custRect.top + dp(128f), labelPaint)
+        y += splitH + dp(14f)
+
+        // 3. 2x2 Pastel Charge Metric Tiles (Brand-New Form Design)
+        if (hasLand) {
+            val gridHeaderH = dp(24f)
+            canvas.drawText(if (isBengali) "জমি ও বিলের বিবরণ" else "CHARGE DETAILS", outerPad + dp(4f), y + dp(16f), capPaint)
+            val tileTop = y + gridHeaderH + dp(4f)
+            val tileGap = dp(10f)
+            val tileW = (availW - tileGap) / 2f
+            val tileH = dp(70f)
+
+            fun drawMetricTile(
+                col: Int,
+                row: Int,
+                tileLabel: String,
+                tileValue: String,
+                highlight: Boolean = false
+            ) {
+                val left = outerPad + col * (tileW + tileGap)
+                val top = tileTop + row * (tileH + tileGap)
+                val rect = RectF(left, top, left + tileW, top + tileH)
+                canvas.drawRoundRect(rect, dp(14f), dp(14f), if (highlight) pastelCardPaint else whiteCardPaint)
+                canvas.drawRoundRect(rect, dp(14f), dp(14f), if (highlight) accentBorderPaint else softBorderPaint)
+                canvas.drawText(tileLabel, rect.left + dp(14f), rect.top + dp(24f), labelPaint)
+                val vp = TextPaint(valPaint).apply {
+                    textSize = if (highlight) dp(18.5f) else dp(15.5f)
+                    color = if (highlight) primaryColor else inkColor
+                }
+                canvas.drawText(tileValue, rect.left + dp(14f), rect.top + dp(52f), vp)
+            }
+
+            drawMetricTile(0, 0, if (isBengali) "সিজন" else "Season", bill.season.ifBlank { "Regular" })
+            drawMetricTile(
+                1,
+                0,
+                if (isBengali) "জমির পরিমাণ" else "Land",
+                "${String.format(Locale.US, "%.2f", bill.bigha)} Bigha (${formatQty(bill.landAmount)} ${bill.unit})"
+            )
+            drawMetricTile(
+                0,
+                1,
+                if (isBengali) "রেট" else "Rate",
+                if (isBengali) "${formatInr(bill.rate)}/বিঘা" else "${formatInr(bill.rate)}/Bigha"
+            )
+            drawMetricTile(
+                1,
+                1,
+                if (isBengali) "বর্তমান বিল" else "Current Bill",
+                formatInr(bill.current),
+                highlight = true
+            )
+            y += dp(184f) + dp(14f)
+        } else {
+            val recH = dp(86f)
+            val recRect = RectF(outerPad, y, w - outerPad, y + recH)
+            canvas.drawRoundRect(recRect, dp(14f), dp(14f), whiteCardPaint)
+            canvas.drawRoundRect(recRect, dp(14f), dp(14f), softBorderPaint)
+            canvas.drawText(if (isBengali) "জমি ও বিলের বিবরণ" else "CHARGE DETAILS", recRect.left + dp(14f), recRect.top + dp(26f), capPaint)
+            canvas.drawText(if (isBengali) "জের বাকি হিসাব" else "Previous Due Recovery Bill", recRect.left + dp(14f), recRect.top + dp(58f), valPaint)
+            y += recH + dp(14f)
+        }
+
+        // 4. Side-by-Side Payment Summary Box + Square UPI QR Card
+        val sumBlockH = if (qrBitmap != null) dp(212f) else dp(192f)
+        val sumW = if (qrBitmap != null) (availW - colGap) * 0.60f else availW
+        val sumRect = RectF(outerPad, y, outerPad + sumW, y + sumBlockH)
+        canvas.drawRoundRect(sumRect, dp(16f), dp(16f), whiteCardPaint)
+        canvas.drawRoundRect(sumRect, dp(16f), dp(16f), accentBorderPaint)
+
+        canvas.drawText(if (isBengali) "পেমেন্ট সারসংক্ষেপ" else "PAYMENT SUMMARY", sumRect.left + dp(14f), sumRect.top + dp(26f), capPaint)
+
+        fun drawSumLine(rowY: Float, k: String, v: String, vColor: Int = inkColor) {
+            val vp = TextPaint(valPaint).apply { color = vColor }
+            canvas.drawText(k, sumRect.left + dp(14f), rowY, labelPaint)
+            val vw = vp.measureText(v)
+            canvas.drawText(v, sumRect.right - dp(14f) - vw, rowY, vp)
+            canvas.drawLine(sumRect.left + dp(14f), rowY + dp(10f), sumRect.right - dp(14f), rowY + dp(10f), hairlinePaint)
+        }
+
+        var sy = sumRect.top + dp(54f)
+        drawSumLine(sy, if (isBengali) "জের বাকি" else "Previous Due", formatInr(bill.previousDue))
+        sy += dp(32f)
+        drawSumLine(sy, if (isBengali) "মোট মূল্য" else "Total Amount", formatInr(bill.allTotal))
+        sy += dp(32f)
+        drawSumLine(sy, if (isBengali) "জমা" else "Paid", formatInr(paid), vColor = 0xFF15803D.toInt())
+
+        // Highlighted Payable Due pill banner at bottom of summary card
+        val duePillRect = RectF(
+            sumRect.left + dp(12f),
+            sumRect.bottom - dp(54f),
+            sumRect.right - dp(12f),
+            sumRect.bottom - dp(12f)
+        )
+        canvas.drawRoundRect(duePillRect, dp(12f), dp(12f), pastelCardPaint)
+        val dueLabelPaint = TextPaint(valPaint).apply { textSize = dp(16f) }
+        val dueAmtPaint = TextPaint(valPaint).apply {
+            textSize = dp(19.5f)
+            color = dueColor
+        }
+        val dueLabelText = if (isBengali) "মোট বাকি" else "Payable Due"
+        canvas.drawText(dueLabelText, duePillRect.left + dp(12f), duePillRect.top + dp(27f), dueLabelPaint)
+        val dueValStr = formatInr(due)
+        val dvw = dueAmtPaint.measureText(dueValStr)
+        canvas.drawText(dueValStr, duePillRect.right - dp(12f) - dvw, duePillRect.top + dp(28f), dueAmtPaint)
+
+        // Right UPI QR Card (if available)
+        if (qrBitmap != null) {
+            val qrRect = RectF(sumRect.right + colGap, y, w - outerPad, y + sumBlockH)
+            canvas.drawRoundRect(qrRect, dp(16f), dp(16f), pastelCardPaint)
+            canvas.drawRoundRect(qrRect, dp(16f), dp(16f), accentBorderPaint)
+
+            val qrCap = if (isBengali) "স্ক্যান ও পে (UPI)" else "SCAN & PAY"
+            val qcw = capPaint.measureText(qrCap)
+            canvas.drawText(qrCap, qrRect.centerX() - qcw / 2f, qrRect.top + dp(24f), capPaint)
+
+            val qrSize = dp(126f).roundToInt()
+            val qrLeft = (qrRect.centerX() - qrSize / 2f).roundToInt()
+            val qrTop = (qrRect.top + dp(34f)).roundToInt()
+            // White quiet zone behind QR
+            canvas.drawRoundRect(
+                RectF(qrLeft - dp(6f), qrTop - dp(6f), qrLeft + qrSize + dp(6f), qrTop + qrSize + dp(6f)),
+                dp(10f),
+                dp(10f),
+                whiteCardPaint
+            )
+            canvas.drawBitmap(qrBitmap, null, Rect(qrLeft, qrTop, qrLeft + qrSize, qrTop + qrSize), null)
+
+            val payAmt = if (due > 0.001) formatInr(due) else formatInr(bill.allTotal)
+            val qrAmtPaint = TextPaint(valPaint).apply {
+                textSize = dp(14.5f)
+                color = primaryColor
+            }
+            val qaw = qrAmtPaint.measureText(payAmt)
+            canvas.drawText(payAmt, qrRect.centerX() - qaw / 2f, qrRect.bottom - dp(14f), qrAmtPaint)
+        }
+        y += sumBlockH + dp(14f)
+
+        // 5. Recent Payments mini strip
+        if (paymentRowsCount > 0) {
+            val rpH = dp(44f) + paymentRowsCount * dp(26f)
+            val rpRect = RectF(outerPad, y, w - outerPad, y + rpH)
+            canvas.drawRoundRect(rpRect, dp(14f), dp(14f), whiteCardPaint)
+            canvas.drawRoundRect(rpRect, dp(14f), dp(14f), softBorderPaint)
+            canvas.drawText("RECENT PAYMENTS", rpRect.left + dp(14f), rpRect.top + dp(24f), capPaint)
+            var ry = rpRect.top + dp(48f)
+            payments.take(paymentRowsCount).forEachIndexed { idx, p ->
+                canvas.drawText("${p.date} · ${p.mode}", rpRect.left + dp(14f), ry, labelPaint)
+                val amtStr = "+${formatInr(p.amount)}"
+                val pValPaint = TextPaint(valPaint).apply {
+                    textSize = dp(14.5f)
+                    color = 0xFF15803D.toInt()
+                }
+                val aw = pValPaint.measureText(amtStr)
+                canvas.drawText(amtStr, rpRect.right - dp(14f) - aw, ry, pValPaint)
+                if (idx < paymentRowsCount - 1) {
+                    canvas.drawLine(rpRect.left + dp(14f), ry + dp(9f), rpRect.right - dp(14f), ry + dp(9f), hairlinePaint)
+                }
+                ry += dp(26f)
+            }
+            y += rpH + dp(14f)
+        }
+
+        if (hasNote) {
+            canvas.drawText("Note: ${bill.note.take(58)}", outerPad + dp(6f), y + dp(18f), labelPaint)
+            y += dp(36f)
+        }
+
+        // 6. Handwritten Proprietor Signature + Date
+        drawHandwrittenOwnerSignatureSection(
+            canvas = canvas,
+            left = outerPad,
+            right = w - outerPad,
+            topY = y,
+            dp = { dp(it) },
+            settings = settings,
+            billDate = bill.date,
+            primaryColor = primaryColor,
+            mutedColor = mutedColor
+        )
+
+        return bitmap
     }
 
     /**
@@ -367,8 +1319,12 @@ object BillDocumentEngine {
         val dueColor = if (due > 0.001) 0xFFDC2626.toInt() else 0xFF15803D.toInt()
 
         // Measure dynamic total height accurately
+        val isEmeraldPro = design == BillDesignModel.PREMIUM_GREEN
         var estH = outerPad * 2f
-        estH += dp(130f) // Top colored brand banner
+        estH += if (isEmeraldPro) dp(154f) else dp(130f) // Top colored brand banner
+        if (customerBarcodeBitmap != null) {
+            estH += dp(12f) + dp(54f) // Compact Customer ID barcode right after header
+        }
         estH += dp(14f) + dp(72f) // Bill No & Date twin pills
         if (isQrHero && qrBitmap != null) {
             estH += dp(14f) + dp(236f)
@@ -380,9 +1336,6 @@ object BillDocumentEngine {
         if (hasNote) estH += dp(12f) + dp(44f)
         if (!isQrHero && qrBitmap != null) {
             estH += dp(14f) + dp(236f) // Payment QR card
-        }
-        if (customerBarcodeBitmap != null) {
-            estH += dp(12f) + dp(86f) // Compact horizontal 1D Code 128 Customer ID barcode
         }
         estH += dp(16f) + dp(96f) // Handwritten signature + date + footer
         if (size.isFullA4) {
@@ -397,8 +1350,7 @@ object BillDocumentEngine {
         // Outer subtle colored border frame (+ gold inner double frame for luxury editions)
         val isRoyalGold = design == BillDesignModel.ROYAL_GOLD
         val isMidnight = design == BillDesignModel.MIDNIGHT_PREMIUM
-        val hasLuxuryDoubleTrim = isRoyalGold || isMidnight || isBengali ||
-            design == BillDesignModel.ROSE_VELVET ||
+        val hasLuxuryDoubleTrim = isEmeraldPro || isRoyalGold || isMidnight || isBengali ||
             design == BillDesignModel.IMPERIAL_TEAL ||
             design == BillDesignModel.SUNSET_SAFFRON ||
             design == BillDesignModel.AMETHYST_LUXE
@@ -460,19 +1412,31 @@ object BillDocumentEngine {
 
         var y = outerPad
 
-        // 1. Top Gradient Brand Banner with subtle luxury accent badge
-        val bannerH = dp(126f)
+        // 1. Top Gradient Brand Banner — Upgraded Royal Centered Header for Emerald Crest Pro
+        val bannerH = if (isEmeraldPro) dp(150f) else dp(126f)
         val bannerRect = RectF(outerPad, y, w - outerPad, y + bannerH)
         val bannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(
-                bannerRect.left,
-                bannerRect.top,
-                bannerRect.right,
-                bannerRect.bottom,
-                primaryColor,
-                secondaryColor,
-                Shader.TileMode.CLAMP
-            )
+            shader = if (isEmeraldPro) {
+                LinearGradient(
+                    bannerRect.left,
+                    bannerRect.top,
+                    bannerRect.right,
+                    bannerRect.bottom,
+                    intArrayOf(0xFF033B2A.toInt(), 0xFF0B7A4B.toInt(), 0xFF045D3B.toInt()),
+                    floatArrayOf(0f, 0.52f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            } else {
+                LinearGradient(
+                    bannerRect.left,
+                    bannerRect.top,
+                    bannerRect.right,
+                    bannerRect.bottom,
+                    primaryColor,
+                    secondaryColor,
+                    Shader.TileMode.CLAMP
+                )
+            }
         }
         canvas.drawRoundRect(bannerRect, dp(18f), dp(18f), bannerPaint)
 
@@ -483,42 +1447,125 @@ object BillDocumentEngine {
             else -> "INVOICE"
         }
         val badgeTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isRoyalGold) 0xFF451A03.toInt() else Color.WHITE
-            textSize = dp(11.5f)
+            color = if (isRoyalGold || isEmeraldPro) 0xFF1F2937.toInt() else Color.WHITE
+            textSize = dp(11f)
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
         val badgeW = badgeTextPaint.measureText(badgeText) + dp(20f)
-        val badgeH = dp(24f)
+        val badgeH = dp(23f)
         val badgeRect = RectF(
             bannerRect.right - innerPad - badgeW,
-            bannerRect.top + dp(16f),
+            bannerRect.top + dp(14f),
             bannerRect.right - innerPad,
-            bannerRect.top + dp(16f) + badgeH
+            bannerRect.top + dp(14f) + badgeH
         )
         val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isRoyalGold) 0xFFFBBF24.toInt() else 0x33FFFFFF
+            color = if (isRoyalGold || isEmeraldPro) 0xFFFDE68A.toInt() else 0x33FFFFFF
         }
         canvas.drawRoundRect(badgeRect, dp(12f), dp(12f), badgeBgPaint)
         canvas.drawText(
             badgeText,
             badgeRect.left + dp(10f),
-            badgeRect.top + dp(16.5f),
+            badgeRect.top + dp(16f),
             badgeTextPaint
         )
 
         val companyName = settings.company.ifBlank { "আশা মিনি শ্যালো" }
-        canvas.drawText(companyName, bannerRect.left + innerPad, bannerRect.top + dp(42f), headerTitlePaint)
-        if (settings.address.isNotBlank()) {
-            canvas.drawText(settings.address.take(54), bannerRect.left + innerPad, bannerRect.top + dp(72f), headerSubPaint)
-        }
         val contactUpi = listOfNotNull(
             settings.contact.takeIf { it.isNotBlank() }?.let { "Ph: $it" },
             settings.upi.takeIf { it.isNotBlank() }?.let { "UPI: $it" }
         ).joinToString("  •  ")
-        if (contactUpi.isNotBlank()) {
-            canvas.drawText(contactUpi, bannerRect.left + innerPad, bannerRect.top + dp(100f), headerSubPaint)
+
+        if (isEmeraldPro) {
+            // Ornamental gold inner crest frame & luminous radial center sheen
+            canvas.save()
+            val clipBanner = Path().apply { addRoundRect(bannerRect, dp(18f), dp(18f), Path.Direction.CW) }
+            canvas.clipPath(clipBanner)
+            val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                alpha = 18
+            }
+            canvas.drawCircle(bannerRect.centerX(), bannerRect.top + dp(40f), dp(135f), glowPaint)
+            canvas.restore()
+
+            val goldLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFFFBBF24.toInt()
+                alpha = 195
+                strokeWidth = dp(1.6f)
+            }
+            canvas.drawRoundRect(
+                RectF(bannerRect.left + dp(7f), bannerRect.top + dp(7f), bannerRect.right - dp(7f), bannerRect.bottom - dp(7f)),
+                dp(13f),
+                dp(13f),
+                Paint(goldLinePaint).apply { style = Paint.Style.STROKE; strokeWidth = dp(1.1f); alpha = 115 }
+            )
+
+            // Top-left subtle gold tag
+            val crestTagPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFFFDE68A.toInt()
+                textSize = dp(10.5f)
+                letterSpacing = 0.14f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            }
+            canvas.drawText(
+                if (isBengali) "অফিশিয়াল বিল" else "OFFICIAL CREST",
+                bannerRect.left + innerPad,
+                bannerRect.top + dp(30f),
+                crestTagPaint
+            )
+
+            // Centered Hero Company Name in Premium Mid-Position
+            val centeredTitlePaint = TextPaint(headerTitlePaint).apply {
+                textSize = dp(31f)
+            }
+            val titleW = centeredTitlePaint.measureText(companyName)
+            canvas.drawText(companyName, bannerRect.centerX() - titleW / 2f, bannerRect.top + dp(74f), centeredTitlePaint)
+
+            // Short centered golden accent dash right beneath the company name
+            canvas.drawLine(
+                bannerRect.centerX() - dp(36f),
+                bannerRect.top + dp(86f),
+                bannerRect.centerX() + dp(36f),
+                bannerRect.top + dp(86f),
+                goldLinePaint
+            )
+
+            // Centered Address & Contact/UPI lines
+            if (settings.address.isNotBlank()) {
+                val addrStr = settings.address.take(54)
+                val aw = headerSubPaint.measureText(addrStr)
+                canvas.drawText(addrStr, bannerRect.centerX() - aw / 2f, bannerRect.top + dp(108f), headerSubPaint)
+            }
+            if (contactUpi.isNotBlank()) {
+                val cw = headerSubPaint.measureText(contactUpi)
+                canvas.drawText(contactUpi, bannerRect.centerX() - cw / 2f, bannerRect.top + dp(131f), headerSubPaint)
+            }
+        } else {
+            canvas.drawText(companyName, bannerRect.left + innerPad, bannerRect.top + dp(42f), headerTitlePaint)
+            if (settings.address.isNotBlank()) {
+                canvas.drawText(settings.address.take(54), bannerRect.left + innerPad, bannerRect.top + dp(72f), headerSubPaint)
+            }
+            if (contactUpi.isNotBlank()) {
+                canvas.drawText(contactUpi, bannerRect.left + innerPad, bannerRect.top + dp(100f), headerSubPaint)
+            }
         }
-        y += bannerH + dp(14f)
+        y += bannerH + dp(12f)
+
+        // Compact 1D Customer ID Barcode right after header (well separated from Payment QR!)
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            y = drawCompactTopCustomerBarcodeBar(
+                canvas = canvas,
+                left = outerPad,
+                right = w - outerPad,
+                topY = y,
+                dp = { dp(it) },
+                barcodeBitmap = customerBarcodeBitmap,
+                customerId = customerBarcodeId,
+                primaryColor = primaryColor,
+                mutedColor = mutedColor,
+                borderPaint = boxStrokePaint
+            )
+        }
 
         // 2. Twin Bill No & Date Cards
         val gap = dp(12f)
@@ -687,27 +1734,6 @@ object BillDocumentEngine {
             y = drawQrCardBlock(y)
         }
 
-        // Compact 1D Code 128 Barcode for Customer ID (fast camera lookup)
-        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
-            val bcH = dp(84f)
-            val bcRect = RectF(outerPad, y, w - outerPad, y + bcH)
-            canvas.drawRoundRect(bcRect, dp(14f), dp(14f), boxStrokePaint)
-            val barW = dp(340f).roundToInt()
-            val barH = dp(48f).roundToInt()
-            val barLeft = (bcRect.centerX() - barW / 2f).roundToInt()
-            val barTop = (bcRect.top + dp(10f)).roundToInt()
-            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(barLeft, barTop, barLeft + barW, barTop + barH), null)
-            val idPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = mutedColor
-                textSize = dp(11.5f)
-                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            }
-            val idText = "CUSTOMER ID · $customerBarcodeId"
-            val idW = idPaint.measureText(idText)
-            canvas.drawText(idText, bcRect.centerX() - idW / 2f, bcRect.bottom - dp(10f), idPaint)
-            y += bcH + dp(12f)
-        }
-
         // 6. Bengali Thank You / Reminder Footer + Handwritten Owner Signature with Date
         drawHandwrittenOwnerSignatureSection(
             canvas = canvas,
@@ -760,7 +1786,7 @@ object BillDocumentEngine {
         estH += dp(155f)
         if (paymentRowsCount > 0) estH += dp(64f) + paymentRowsCount * dp(30f)
         if (qrBitmap != null) estH += dp(175f)
-        if (customerBarcodeBitmap != null) estH += dp(88f)
+        if (customerBarcodeBitmap != null) estH += dp(66f)
         if (hasNote) estH += dp(48f)
         estH += dp(115f) // Handwritten owner signature + date
         if (size.isFullA4) {
@@ -860,7 +1886,28 @@ object BillDocumentEngine {
         }
         canvas.drawText(tagText, tagRect.left + dp(10f), tagRect.top + dp(20f), tagPaint)
 
-        y += headerH + dp(16f)
+        y += headerH + dp(12f)
+
+        // Compact 1D Customer ID Barcode right after header (separate from Payment QR at bottom)
+        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
+            val topBcBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                color = if (isThermal) Color.BLACK else hairlineColor
+                strokeWidth = dp(1.2f)
+            }
+            y = drawCompactTopCustomerBarcodeBar(
+                canvas = canvas,
+                left = pad,
+                right = w - pad,
+                topY = y,
+                dp = { dp(it) },
+                barcodeBitmap = customerBarcodeBitmap,
+                customerId = customerBarcodeId,
+                primaryColor = primaryColor,
+                mutedColor = mutedColor,
+                borderPaint = topBcBorder
+            )
+        }
 
         // Customer Box
         val custBoxH = dp(104f)
@@ -974,22 +2021,6 @@ object BillDocumentEngine {
                 canvas.drawText("Payable: ${formatInr(due)}", tx, qrRect.top + dp(118f), ap)
             }
             y += qrBoxH + dp(14f)
-        }
-
-        if (customerBarcodeBitmap != null && customerBarcodeId != null) {
-            val barW = dp(320f).roundToInt()
-            val barH = dp(46f).roundToInt()
-            val barLeft = ((w - barW) / 2f).roundToInt()
-            val barTop = y.roundToInt()
-            canvas.drawBitmap(customerBarcodeBitmap, null, Rect(barLeft, barTop, barLeft + barW, barTop + barH), null)
-            val idPaint = TextPaint(mutedPaint).apply {
-                textSize = dp(11.5f)
-                typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-            }
-            val idText = "ID: $customerBarcodeId"
-            val idW = idPaint.measureText(idText)
-            canvas.drawText(idText, (w - idW) / 2f, barTop + barH + dp(16f), idPaint)
-            y += dp(76f)
         }
 
         if (hasNote) {

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.LocalAshaHaptics
 import com.example.ui.components.PremiumCalculatorIcon
 import com.example.ui.theme.CalcScreenBg
 import com.example.ui.theme.CalcScreenSub
@@ -163,6 +164,7 @@ fun CalculatorScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    val haptics = LocalAshaHaptics.current
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         rows.forEach { rowKeys ->
                             Row(
@@ -183,7 +185,10 @@ fun CalculatorScreen(
                                         else -> MaterialTheme.colorScheme.onSurface
                                     }
                                     Surface(
-                                        onClick = { onKeyPress(key) },
+                                        onClick = {
+                                            haptics.tap()
+                                            onKeyPress(key)
+                                        },
                                         shape = RoundedCornerShape(14.dp),
                                         color = bg,
                                         modifier = Modifier
@@ -205,7 +210,10 @@ fun CalculatorScreen(
                         }
 
                         Button(
-                            onClick = { onKeyPress("=") },
+                            onClick = {
+                                haptics.confirm()
+                                onKeyPress("=")
+                            },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
                             modifier = Modifier

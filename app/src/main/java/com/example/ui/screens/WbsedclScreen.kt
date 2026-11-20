@@ -100,6 +100,7 @@ import com.example.ui.components.AnimatedBmwPrecisionStripe
 import com.example.ui.components.AnimatedCurrencyText
 import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.ProvideSafeTextToolbar
 import com.example.ui.components.BmwPrecisionStripe
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.components.PremiumElectricIcon
@@ -1034,6 +1035,52 @@ private fun WbsedclPortalWebViewDialog(
         """.trimIndent()
     }
 
+    fun focusCaptchaField(view: WebView?, notifyUser: Boolean = false) {
+        if (view == null) return
+        val script = """
+            (function() {
+                function tryFocus(doc) {
+                    if (!doc) return false;
+                    var inputs = Array.prototype.slice.call(doc.querySelectorAll('input'));
+                    var target = inputs.find(function(inp) {
+                        var t = (inp.type || 'text').toLowerCase();
+                        if (t !== 'text' && t !== 'number' && t !== 'search') return false;
+                        if (inp.disabled || inp.readOnly) return false;
+                        var meta = ((inp.id || '') + ' ' + (inp.name || '') + ' ' +
+                            (inp.placeholder || '') + ' ' + (inp.getAttribute('aria-label') || '')).toLowerCase();
+                        return /captcha|code|verif|security/.test(meta);
+                    });
+                    if (target) {
+                        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        target.focus();
+                        target.style.outline = '2px solid #F59E0B';
+                        target.style.backgroundColor = '#FFFBEB';
+                        return true;
+                    }
+                    return false;
+                }
+                if (tryFocus(document)) return 'FOCUSED';
+                var frames = document.querySelectorAll('iframe, frame');
+                for (var f = 0; f < frames.length; f++) {
+                    try {
+                        if (tryFocus(frames[f].contentDocument)) return 'FOCUSED';
+                    } catch (e) {}
+                }
+                return 'NOT_FOUND';
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(script) { result ->
+            if (notifyUser) {
+                val msg = if (result?.contains("FOCUSED") == true) {
+                    "Type the security captcha code shown on screen"
+                } else {
+                    "Tap the captcha box on the portal to enter the code"
+                }
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun triggerAutoPaste(view: WebView?, notifyUser: Boolean = false) {
         if (view == null || consumerNo.isBlank()) return
         val script = buildAutoFillScript(consumerNo)
@@ -1041,8 +1088,9 @@ private fun WbsedclPortalWebViewDialog(
             val didFill = result?.contains("FILLED") == true
             if (didFill) {
                 autoFilled = true
+                focusCaptchaField(view, notifyUser = false)
                 if (notifyUser) {
-                    Toast.makeText(context, "Consumer ID $consumerNo pasted!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Consumer ID $consumerNo pasted! Enter captcha to proceed.", Toast.LENGTH_SHORT).show()
                 }
             } else if (notifyUser) {
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -1055,6 +1103,8 @@ private fun WbsedclPortalWebViewDialog(
     DisposableEffect(Unit) {
         onDispose {
             webViewRef?.apply {
+                clearFocus()
+                onPause()
                 stopLoading()
                 destroy()
             }
@@ -1201,31 +1251,46 @@ private fun WbsedclPortalWebViewDialog(
                                         )
                                     }
                                     Text(
-                                        text = if (autoFilled) "ID Auto-Pasted: $consumerNo" else "ID: $consumerNo",
+                                        text = if (autoFilled) "ID Pasted · Enter Captcha" else "ID: $consumerNo",
                                         style = MaterialTheme.typography.labelMedium,
                                         fontFamily = FontFamily.Monospace,
                                         color = Color.White,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
 
-                            Button(
-                                onClick = { triggerAutoPaste(webViewRef, notifyUser = true) },
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                modifier = Modifier
-                                    .height(32.dp)
-                                    .testTag("wbsedcl_portal_autofill_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentPasteGo,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Paste ID", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { focusCaptchaField(webViewRef, notifyUser = true) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, Color(0xFF475569)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .testTag("wbsedcl_portal_focus_captcha_button")
+                                ) {
+                                    Text("Captcha", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                }
+                                Button(
+                                    onClick = { triggerAutoPaste(webViewRef, notifyUser = true) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .testTag("wbsedcl_portal_autofill_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ContentPasteGo,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Paste ID", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -1333,33 +1398,35 @@ private fun WbsedclConsumerFormDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "Add WBSEDCL Consumer ID" else "Edit Consumer ID") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = label,
-                    onValueChange = { label = it },
-                    label = { Text("Label (e.g. Shallow 1, Main Pump)") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("wbsedcl_dialog_label_input")
-                )
-                OutlinedTextField(
-                    value = consumerNo,
-                    onValueChange = { consumerNo = it },
-                    label = { Text("WBSEDCL Consumer ID") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("wbsedcl_dialog_consumer_no_input")
-                )
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Location / Meter Note (Optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+            ProvideSafeTextToolbar {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { label = it },
+                        label = { Text("Label (e.g. Shallow 1, Main Pump)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("wbsedcl_dialog_label_input")
+                    )
+                    OutlinedTextField(
+                        value = consumerNo,
+                        onValueChange = { consumerNo = it },
+                        label = { Text("WBSEDCL Consumer ID") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("wbsedcl_dialog_consumer_no_input")
+                    )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Location / Meter Note (Optional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         },
         confirmButton = {

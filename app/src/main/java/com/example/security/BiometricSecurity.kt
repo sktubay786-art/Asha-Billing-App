@@ -91,16 +91,48 @@ enum class ThemeColorOption(
     val key: String,
     val label: String,
     val primaryHex: Long,
-    val deepHex: Long
+    val deepHex: Long,
+    val lightContainerHex: Long,
+    val darkPrimaryHex: Long
 ) {
-    EMERALD("emerald", "Asha Emerald", 0xFF0B6B50, 0xFF084B3D),
-    TEAL("teal", "Ocean Teal", 0xFF0F766E, 0xFF115E59),
-    FOREST("forest", "Deep Forest", 0xFF15803D, 0xFF14532D),
-    SAPPHIRE("sapphire", "Royal Blue", 0xFF0369A1, 0xFF0C4A6E);
+    EMERALD("emerald", "Asha Emerald", 0xFF0B6B50, 0xFF084B3D, 0xFFE6F6EE, 0xFF34D399),
+    TEAL("teal", "Ocean Teal", 0xFF0F766E, 0xFF115E59, 0xFFE6F7F5, 0xFF2DD4BF),
+    SAPPHIRE("sapphire", "Royal Sapphire", 0xFF1D4ED8, 0xFF1E3A8A, 0xFFEFF6FF, 0xFF60A5FA),
+    IMPERIAL_GOLD("gold", "Imperial Gold", 0xFFB45309, 0xFF78350F, 0xFFFEF3C7, 0xFFFBBF24),
+    AMETHYST("amethyst", "Amethyst Silk", 0xFF6D28D9, 0xFF4C1D95, 0xFFF3E8FF, 0xFFA78BFA),
+    ROSE_QUARTZ("rose", "Rose Quartz", 0xFFBE185D, 0xFF831843, 0xFFFCE7F3, 0xFFF472B6),
+    OBSIDIAN("obsidian", "Obsidian Slate", 0xFF1E293B, 0xFF0F172A, 0xFFE2E8F0, 0xFF94A3B8),
+    FOREST("forest", "Deep Forest", 0xFF15803D, 0xFF14532D, 0xFFDCFCE7, 0xFF4ADE80);
 
     companion object {
         fun fromKey(key: String): ThemeColorOption =
             entries.firstOrNull { it.key == key } ?: EMERALD
+    }
+}
+
+enum class ThermalConnectionType(val key: String, val label: String) {
+    SYSTEM_PRINT("system", "System Print"),
+    BLUETOOTH("bluetooth", "Bluetooth"),
+    WIFI_TCP("wifi", "Wi-Fi / LAN");
+
+    companion object {
+        fun fromKey(key: String): ThermalConnectionType =
+            entries.firstOrNull { it.key == key } ?: SYSTEM_PRINT
+    }
+}
+
+enum class ThermalPaperWidth(val key: String, val label: String, val defaultMm: Int) {
+    MM_58("58mm", "58 mm", 58),
+    MM_80("80mm", "80 mm", 80),
+    MM_110("110mm", "110 mm (4\")", 110),
+    CUSTOM("custom", "Custom", 80);
+
+    fun displayLabel(customMm: Int): String =
+        if (this == CUSTOM) "${customMm.coerceIn(38, 120)} mm" else label
+
+    companion object {
+        fun fromKey(key: String): ThermalPaperWidth =
+            entries.firstOrNull { it.key == key } ?: MM_80
     }
 }
 
@@ -116,7 +148,18 @@ data class AppLocalPreferences(
     val qrImagePath: String = "",
     val defaultPrintSize: String = "Thermal · 80 mm",
     val defaultBillTemplate: String = "Premium Green Bill",
-    val bengaliBillMode: Boolean = false
+    val bengaliBillMode: Boolean = false,
+    val printerConnectionType: ThermalConnectionType = ThermalConnectionType.SYSTEM_PRINT,
+    val printerBluetoothName: String = "",
+    val printerBluetoothAddress: String = "",
+    val printerWifiHost: String = "",
+    val printerWifiPort: Int = 9100,
+    val printerPaperWidth: ThermalPaperWidth = ThermalPaperWidth.MM_80,
+    val printerCustomWidthMm: Int = 80,
+    val printerAutoCut: Boolean = true,
+    val printerDensity: Int = 148,
+    val hapticFeedbackEnabled: Boolean = true,
+    val offlineModeEnabled: Boolean = false
 )
 
 class AppPreferencesStore(context: Context) {
@@ -140,7 +183,24 @@ class AppPreferencesStore(context: Context) {
         defaultPrintSize = prefs.getString(KEY_PRINT_SIZE, "Thermal · 80 mm") ?: "Thermal · 80 mm",
         defaultBillTemplate = prefs.getString(KEY_BILL_TEMPLATE, "Premium Green Bill")
             ?: "Premium Green Bill",
-        bengaliBillMode = prefs.getBoolean(KEY_BENGALI_BILL_MODE, false)
+        bengaliBillMode = prefs.getBoolean(KEY_BENGALI_BILL_MODE, false),
+        printerConnectionType = ThermalConnectionType.fromKey(
+            prefs.getString(KEY_PRINTER_CONN_TYPE, ThermalConnectionType.SYSTEM_PRINT.key)
+                ?: ThermalConnectionType.SYSTEM_PRINT.key
+        ),
+        printerBluetoothName = prefs.getString(KEY_PRINTER_BT_NAME, "") ?: "",
+        printerBluetoothAddress = prefs.getString(KEY_PRINTER_BT_ADDR, "") ?: "",
+        printerWifiHost = prefs.getString(KEY_PRINTER_WIFI_HOST, "") ?: "",
+        printerWifiPort = prefs.getInt(KEY_PRINTER_WIFI_PORT, 9100).coerceIn(1, 65535),
+        printerPaperWidth = ThermalPaperWidth.fromKey(
+            prefs.getString(KEY_PRINTER_PAPER_WIDTH, ThermalPaperWidth.MM_80.key)
+                ?: ThermalPaperWidth.MM_80.key
+        ),
+        printerCustomWidthMm = prefs.getInt(KEY_PRINTER_CUSTOM_MM, 80).coerceIn(38, 120),
+        printerAutoCut = prefs.getBoolean(KEY_PRINTER_AUTO_CUT, true),
+        printerDensity = prefs.getInt(KEY_PRINTER_DENSITY, 148).coerceIn(70, 210),
+        hapticFeedbackEnabled = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true),
+        offlineModeEnabled = prefs.getBoolean(KEY_OFFLINE_MODE, false)
     )
 
     fun update(transform: (AppLocalPreferences) -> AppLocalPreferences) {
@@ -159,6 +219,17 @@ class AppPreferencesStore(context: Context) {
             .putString(KEY_PRINT_SIZE, next.defaultPrintSize)
             .putString(KEY_BILL_TEMPLATE, next.defaultBillTemplate)
             .putBoolean(KEY_BENGALI_BILL_MODE, next.bengaliBillMode)
+            .putString(KEY_PRINTER_CONN_TYPE, next.printerConnectionType.key)
+            .putString(KEY_PRINTER_BT_NAME, next.printerBluetoothName)
+            .putString(KEY_PRINTER_BT_ADDR, next.printerBluetoothAddress)
+            .putString(KEY_PRINTER_WIFI_HOST, next.printerWifiHost)
+            .putInt(KEY_PRINTER_WIFI_PORT, next.printerWifiPort.coerceIn(1, 65535))
+            .putString(KEY_PRINTER_PAPER_WIDTH, next.printerPaperWidth.key)
+            .putInt(KEY_PRINTER_CUSTOM_MM, next.printerCustomWidthMm.coerceIn(38, 120))
+            .putBoolean(KEY_PRINTER_AUTO_CUT, next.printerAutoCut)
+            .putInt(KEY_PRINTER_DENSITY, next.printerDensity.coerceIn(70, 210))
+            .putBoolean(KEY_HAPTIC_FEEDBACK, next.hapticFeedbackEnabled)
+            .putBoolean(KEY_OFFLINE_MODE, next.offlineModeEnabled)
             .apply()
     }
 
@@ -199,6 +270,17 @@ class AppPreferencesStore(context: Context) {
         private const val KEY_PRINT_SIZE = "default_print_size"
         private const val KEY_BILL_TEMPLATE = "default_bill_template"
         private const val KEY_BENGALI_BILL_MODE = "bengali_bill_mode"
+        private const val KEY_PRINTER_CONN_TYPE = "printer_connection_type"
+        private const val KEY_PRINTER_BT_NAME = "printer_bt_name"
+        private const val KEY_PRINTER_BT_ADDR = "printer_bt_addr"
+        private const val KEY_PRINTER_WIFI_HOST = "printer_wifi_host"
+        private const val KEY_PRINTER_WIFI_PORT = "printer_wifi_port"
+        private const val KEY_PRINTER_PAPER_WIDTH = "printer_paper_width"
+        private const val KEY_PRINTER_CUSTOM_MM = "printer_custom_width_mm"
+        private const val KEY_PRINTER_AUTO_CUT = "printer_auto_cut"
+        private const val KEY_PRINTER_DENSITY = "printer_density"
+        private const val KEY_HAPTIC_FEEDBACK = "haptic_feedback_enabled"
+        private const val KEY_OFFLINE_MODE = "offline_mode_enabled"
     }
 }
 

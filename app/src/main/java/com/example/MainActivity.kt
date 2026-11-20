@@ -21,20 +21,27 @@ import androidx.credentials.CredentialManager
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.LaunchedEffect
 import com.example.auth.AuthScreen
 import com.example.auth.OwnerAccessControl
 import com.example.auth.authStateFlow
 import com.example.auth.signOut
 import com.example.data.firebase.BillingRepository
+import com.example.data.firebase.OfflineModeManager
 import com.example.notifications.DueReminderScheduler
 import com.example.security.AppPreferencesStore
 import com.example.security.AppThemeMode
 import com.example.security.BiometricGateScreen
 import com.example.security.ThemeColorOption
 import com.example.security.checkBiometricAvailability
+import com.example.ui.components.ProvideAshaHaptics
+import com.example.ui.components.ProvideSafeTextToolbar
 import com.example.ui.navigation.AshaAppShell
 import com.example.ui.theme.AshaBillingTheme
 import com.example.ui.viewmodel.BillingViewModel
@@ -50,9 +57,11 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        DueReminderScheduler.ensureChannel(applicationContext)
-        DueReminderScheduler.rescheduleAll(applicationContext)
         pendingNotificationBillId.value = intent?.getStringExtra(DueReminderScheduler.EXTRA_BILL_ID)
+        lifecycleScope.launch(Dispatchers.IO) {
+            DueReminderScheduler.ensureChannel(applicationContext)
+            DueReminderScheduler.rescheduleAll(applicationContext)
+        }
 
         val prefsStore = AppPreferencesStore(applicationContext)
         setContent {
@@ -66,16 +75,22 @@ class MainActivity : FragmentActivity() {
             AshaBillingTheme(
                 darkTheme = isDark,
                 primaryColor = Color(accent.primaryHex),
-                deepColor = Color(accent.deepHex)
+                deepColor = Color(accent.deepHex),
+                lightContainerColor = Color(accent.lightContainerHex),
+                darkPrimaryColor = Color(accent.darkPrimaryHex)
             ) {
-                val windowSizeClass = calculateWindowSizeClass(this)
-                val isWideLayout = windowSizeClass.widthSizeClass != WindowWidthSizeClass.Compact
-                AppNavigation(
-                    isWideLayout = isWideLayout,
-                    prefsStore = prefsStore,
-                    pendingBillId = pendingNotificationBillId.value,
-                    onConsumePendingBillId = { pendingNotificationBillId.value = null }
-                )
+                ProvideSafeTextToolbar {
+                    ProvideAshaHaptics(enabled = localPrefs.hapticFeedbackEnabled) {
+                        val windowSizeClass = calculateWindowSizeClass(this)
+                        val isWideLayout = windowSizeClass.widthSizeClass != WindowWidthSizeClass.Compact
+                        AppNavigation(
+                            isWideLayout = isWideLayout,
+                            prefsStore = prefsStore,
+                            pendingBillId = pendingNotificationBillId.value,
+                            onConsumePendingBillId = { pendingNotificationBillId.value = null }
+                        )
+                    }
+                }
             }
         }
     }
@@ -103,19 +118,19 @@ fun AppNavigation(
     val localPrefs by prefsStore.state.collectAsStateWithLifecycle()
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
 
-    var sessionUnlocked by remember(currentUser?.uid) {
-        mutableStateOf(false)
-    }
+    var unlockedUid by remember { mutableStateOf<String?>(null) }
 
     val user = currentUser
     if (user == null) {
         AuthScreen(
             prefsStore = prefsStore,
+            authScope = scope,
             onAuthSuccess = {
-                sessionUnlocked = true
+                unlockedUid = auth.currentUser?.uid
             }
         )
     } else {
+        val sessionUnlocked = unlockedUid == user.uid
         val biometricAvailable = remember(context) { checkBiometricAvailability(context).isAvailable }
         val requiresLoginGate = localPrefs.biometricEnabled &&
             localPrefs.biometricOnLogin &&
@@ -130,11 +145,16 @@ fun AppNavigation(
                 primaryColor = Color(accent.primaryHex),
                 secondaryActionLabel = stringResourceSafeSignOut(),
                 onSecondaryAction = {
+                    unlockedUid = null
                     signOut(credentialManager, scope)
                 },
-                onUnlocked = { sessionUnlocked = true }
+                onUnlocked = { unlockedUid = user.uid }
             )
         } else {
+            val isDeviceOnline by remember(context) {
+                OfflineModeManager.observeNetworkOnline(context)
+            }.collectAsStateWithLifecycle(initialValue = OfflineModeManager.isCurrentlyOnline(context))
+
             val workspaceId = OwnerAccessControl.workspaceIdFor(user)
             key(user.uid, workspaceId) {
                 val viewModel: BillingViewModel = viewModel(
@@ -146,6 +166,7 @@ fun AppNavigation(
                             }
                             val databaseId = app.getString(R.string.firestore_database_id)
                             val db = FirebaseFirestore.getInstance(databaseId)
+                            OfflineModeManager.configurePersistentCache(db)
                             BillingViewModel(
                                 repository = BillingRepository(db),
                                 currentUserId = workspaceId
@@ -153,6 +174,12 @@ fun AppNavigation(
                         }
                     }
                 )
+                LaunchedEffect(localPrefs.offlineModeEnabled, isDeviceOnline) {
+                    viewModel.syncOfflineState(
+                        manualOffline = localPrefs.offlineModeEnabled,
+                        deviceOnline = isDeviceOnline
+                    )
+                }
                 AshaAppShell(
                     viewModel = viewModel,
                     prefsStore = prefsStore,
@@ -161,7 +188,7 @@ fun AppNavigation(
                     isWideLayout = isWideLayout,
                     pendingNotificationBillId = pendingBillId,
                     onConsumePendingBillId = onConsumePendingBillId,
-                    onLockWorkspace = { sessionUnlocked = false }
+                    onLockWorkspace = { unlockedUid = null }
                 )
             }
         }

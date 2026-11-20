@@ -117,6 +117,17 @@ class BillingViewModel(
     private val _calcState = MutableStateFlow(CalculatorUiState())
     val calcState: StateFlow<CalculatorUiState> = _calcState.asStateFlow()
 
+    fun syncOfflineState(manualOffline: Boolean, deviceOnline: Boolean) {
+        viewModelScope.launch {
+            repository.setOfflineMode(manualOffline = manualOffline, deviceOnline = deviceOnline)
+            _cloudStatus.value = when {
+                manualOffline -> "Offline Mode · Local cache"
+                !deviceOnline -> "No internet · Offline cache"
+                else -> "Cloud synced"
+            }
+        }
+    }
+
     fun openInvoice(billId: String?) {
         _selectedInvoiceId.value = billId
     }

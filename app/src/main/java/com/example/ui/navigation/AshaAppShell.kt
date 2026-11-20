@@ -84,6 +84,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -117,6 +119,7 @@ import com.example.ui.components.EditBillDialog
 import com.example.ui.components.EditPaymentDialog
 import com.example.ui.components.InvoiceDetailDialog
 import com.example.ui.components.IosAppLogoMark
+import com.example.ui.components.LocalAshaHaptics
 import com.example.ui.components.PremiumBillIcon
 import com.example.ui.components.PremiumCalculatorIcon
 import com.example.ui.components.PremiumHistoryIcon
@@ -272,7 +275,14 @@ fun AshaAppShell(
         }
     }
 
+    val focusManager = LocalFocusManager.current
+    val textToolbar = LocalTextToolbar.current
+    val haptics = LocalAshaHaptics.current
+
     fun navigateTo(route: AppRoute) {
+        haptics.tick()
+        textToolbar.hide()
+        focusManager.clearFocus(force = true)
         activeChatCustomerId = null
         navController.navigate(route) {
             popUpTo(navController.graph.findStartDestination().id) {
@@ -312,6 +322,7 @@ fun AshaAppShell(
                     headerTitle = "ASHA Mini Shallow",
                     activeSection = currentSectionLabel,
                     totalOutstanding = dashboardData?.totalOutstanding ?: 0.0,
+                    totalSettled = dashboardData?.totalSettled ?: 0.0,
                     netProfit = dashboardData?.netCollectedProfit ?: 0.0,
                     cloudStatus = cloudStatus,
                     isSyncing = isSyncing,
@@ -321,6 +332,7 @@ fun AshaAppShell(
                     deepColor = deepAccent,
                     onOpenMonthlyAnalytics = { navigateTo(AppRoute.MonthlyAnalytics) },
                     onOpenUsers = { navigateTo(AppRoute.Customers) },
+                    onOpenHistory = { navigateTo(AppRoute.History) },
                     onSyncClick = { viewModel.syncNow() },
                     onLockClick = {
                         billingUnlocked = false
@@ -525,7 +537,7 @@ fun AshaAppShell(
                                         openAddDialogImmediately = openAddCustomerOnNextVisit,
                                         onConsumeAddDialogFlag = { openAddCustomerOnNextVisit = false },
                                         onOpenCustomerChat = { cust -> activeChatCustomerId = cust.id },
-                                        onSaveCustomer = { id, name, phone, village, address, openingDue, landArea, landOwnerType, landOwnerName, onComplete ->
+                                        onSaveCustomer = { id, name, phone, village, address, openingDue, landArea, landUnit, landOwnerType, landOwnerName, onComplete ->
                                             viewModel.saveCustomer(
                                                 existingId = id,
                                                 name = name,
@@ -534,6 +546,7 @@ fun AshaAppShell(
                                                 address = address,
                                                 openingDue = openingDue,
                                                 landArea = landArea,
+                                                landUnit = landUnit,
                                                 landOwnerType = landOwnerType,
                                                 landOwnerName = landOwnerName,
                                                 onComplete = onComplete
@@ -822,7 +835,7 @@ fun AshaAppShell(
                             CustomerFormDialog(
                                 initial = cust,
                                 onDismiss = { editingChatCustomer = null },
-                                onSave = { name, phone, village, address, openingDue, landArea, landOwnerType, landOwnerName ->
+                                onSave = { name, phone, village, address, openingDue, landArea, landUnit, landOwnerType, landOwnerName ->
                                     viewModel.saveCustomer(
                                         existingId = cust.id,
                                         name = name,
@@ -831,6 +844,7 @@ fun AshaAppShell(
                                         address = address,
                                         openingDue = openingDue,
                                         landArea = landArea,
+                                        landUnit = landUnit,
                                         landOwnerType = landOwnerType,
                                         landOwnerName = landOwnerName
                                     ) { success ->
@@ -1002,6 +1016,7 @@ private fun V103EmeraldHeaderBanner(
     headerTitle: String,
     activeSection: String,
     totalOutstanding: Double,
+    totalSettled: Double,
     netProfit: Double,
     cloudStatus: String,
     isSyncing: Boolean,
@@ -1011,6 +1026,7 @@ private fun V103EmeraldHeaderBanner(
     deepColor: Color,
     onOpenMonthlyAnalytics: () -> Unit,
     onOpenUsers: () -> Unit,
+    onOpenHistory: () -> Unit,
     onSyncClick: () -> Unit,
     onLockClick: () -> Unit
 ) {
@@ -1091,17 +1107,21 @@ private fun V103EmeraldHeaderBanner(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                // Clean Frosted Glass Header Dock (Lock & Sync only; P&L Chart, Expenses, Theme live inside app sections)
-                val syncSpinTransition = rememberInfiniteTransition(label = "header_sync_spin")
-                val syncAngle by syncSpinTransition.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 360f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(950, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "sync_rotation"
-                )
+                // Clean Frosted Glass Header Dock — only runs spin animation while actively syncing!
+                val syncAngle = if (isSyncing) {
+                    val syncSpinTransition = rememberInfiniteTransition(label = "header_sync_spin")
+                    syncSpinTransition.animateFloat(
+                        initialValue = 0f,
+                        targetValue = 360f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(950, easing = LinearEasing),
+                            repeatMode = RepeatMode.Restart
+                        ),
+                        label = "sync_rotation"
+                    ).value
+                } else {
+                    0f
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (biometricEnabled) {
                         HeaderGlassIconButton(
@@ -1116,7 +1136,7 @@ private fun V103EmeraldHeaderBanner(
                         icon = Icons.Rounded.Sync,
                         contentDescription = stringResource(R.string.sync_now),
                         highlighted = isSyncing,
-                        rotationDegrees = if (isSyncing) syncAngle else 0f,
+                        rotationDegrees = syncAngle,
                         tag = "topbar_sync_button",
                         onClick = onSyncClick
                     )
@@ -1163,6 +1183,21 @@ private fun V103EmeraldHeaderBanner(
                         text = "Due ${formatInr(totalOutstanding)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (totalOutstanding > 0.001) Color(0xFFFCA5A5) else Color(0xFF86EFAC),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+
+                Surface(
+                    onClick = onOpenHistory,
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color.Black.copy(alpha = 0.22f),
+                    modifier = Modifier.testTag("topbar_settled_pill")
+                ) {
+                    Text(
+                        text = "Settled ${formatInr(totalSettled)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFDE68A),
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
@@ -1243,23 +1278,23 @@ private fun V103FloatingBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 760.dp),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
             border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 12.dp,
+            shadowElevation = 8.dp,
             tonalElevation = 2.dp
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .padding(horizontal = 4.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1270,27 +1305,27 @@ private fun V103FloatingBottomBar(
                         targetValue = if (selected) activeAccent else MaterialTheme.colorScheme.onSurfaceVariant,
                         label = "nav_label_color"
                     )
-                    val displayLabel = if (!isWideLayout && item.label == "Calculator") {
-                        "Calc"
-                    } else {
-                        item.label
+                    val displayLabel = when {
+                        isWideLayout -> item.label
+                        item.label == "Calculator" -> "Calc"
+                        item.label == "Settings" -> "More"
+                        else -> item.label
                     }
-                    val iconSizeDp = if (isWideLayout) 39.dp else 34.dp
+                    val iconSizeDp = if (isWideLayout) 38.dp else 32.dp
                     val indicatorWidth by animateDpAsState(
-                        targetValue = if (selected) 18.dp else 0.dp,
+                        targetValue = if (selected) 16.dp else 0.dp,
                         animationSpec = spring(
                             dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMediumLow
+                            stiffness = Spring.StiffnessMedium
                         ),
                         label = "nav_indicator_width"
                     )
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(16.dp))
-                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(14.dp))
                             .clickable { onSelectRoute(item.route) }
-                            .padding(vertical = 4.dp)
+                            .padding(vertical = 5.dp, horizontal = 1.dp)
                             .testTag(item.tag),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -1333,19 +1368,19 @@ private fun V103FloatingBottomBar(
                                 inactiveBg = MaterialTheme.colorScheme.surfaceVariant,
                                 inactiveTint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 size = iconSizeDp,
-                                iconSize = if (isWideLayout) 20.dp else 18.dp
+                                iconSize = if (isWideLayout) 20.dp else 17.dp
                             )
                         }
                         Text(
                             text = displayLabel,
-                            fontSize = if (isWideLayout) 11.sp else 9.5.sp,
-                            lineHeight = 12.sp,
-                            letterSpacing = if (selected) 0.25.sp else 0.sp,
+                            fontSize = if (isWideLayout) 11.sp else 9.sp,
+                            lineHeight = 11.sp,
+                            letterSpacing = if (isWideLayout) 0.15.sp else (-0.15).sp,
                             maxLines = 1,
                             softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Clip,
                             color = labelColor,
-                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
                         )
                         Box(
                             modifier = Modifier

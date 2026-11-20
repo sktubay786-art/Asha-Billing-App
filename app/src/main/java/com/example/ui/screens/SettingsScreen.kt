@@ -65,26 +65,32 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
@@ -98,13 +104,24 @@ import com.example.security.ThemeColorOption
 import com.example.security.checkBiometricAvailability
 import com.example.security.launchBiometricPrompt
 import com.example.security.loadBitmapFromPath
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.TableView
+import androidx.compose.material.icons.rounded.Vibration
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.IosSquircleIcon
+import com.example.ui.components.LocalAshaHaptics
+import com.example.ui.components.ThermalPrinterSettingsCard
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
 import com.example.util.BillDesignModel
 import com.example.util.BillDocumentEngine
 import com.example.util.BillPrintSize
+import com.example.util.CsvReportExportDialog
+import com.example.util.CsvReportExporter
+import com.example.util.CsvReportType
+import com.example.util.ThermalPrinterManager
 
 private val QR_MODES = listOf("Dynamic amount QR", "Static QR image", "UPI link only")
 
@@ -134,8 +151,10 @@ fun SettingsScreen(
     var upi by remember(settings) { mutableStateOf(settings.upi) }
     var payee by remember(settings) { mutableStateOf(settings.payee) }
 
+    val haptics = LocalAshaHaptics.current
     var qrModeExpanded by remember { mutableStateOf(false) }
     var showCloudDoctor by remember { mutableStateOf(false) }
+    var showCsvExportDialog by remember { mutableStateOf(false) }
     var biometricTestStatus by remember { mutableStateOf<String?>(null) }
 
     val qrPickerLauncher = rememberLauncherForActivityResult(
@@ -175,7 +194,8 @@ fun SettingsScreen(
         )
     }
 
-    val sampleBillBitmap = remember(
+    val sampleBillState by produceState<Pair<ImageBitmap, Float>?>(
+        initialValue = null,
         sampleBill,
         settings,
         selectedDesign,
@@ -183,17 +203,25 @@ fun SettingsScreen(
         localPrefs.qrMode,
         localPrefs.qrImagePath
     ) {
-        BillDocumentEngine.renderBillBitmap(
-            settings = settings,
-            bill = sampleBill,
-            payments = emptyList(),
-            paid = 2000.0,
-            due = 3000.0,
-            design = selectedDesign,
-            size = selectedSize,
-            qrMode = localPrefs.qrMode,
-            customQrPath = localPrefs.qrImagePath
-        )
+        value = withContext(Dispatchers.Default) {
+            val previewRenderSize = if (selectedSize.widthPx > BillPrintSize.THERMAL_80.widthPx) {
+                BillPrintSize.THERMAL_80
+            } else {
+                selectedSize
+            }
+            val bmp = BillDocumentEngine.renderBillBitmap(
+                settings = settings,
+                bill = sampleBill,
+                payments = emptyList(),
+                paid = 2000.0,
+                due = 3000.0,
+                design = selectedDesign,
+                size = previewRenderSize,
+                qrMode = localPrefs.qrMode,
+                customQrPath = localPrefs.qrImagePath
+            )
+            bmp.asImageBitmap() to (bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
+        }
     }
 
     LaunchedEffect(settings) {
@@ -259,61 +287,75 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "App Theme Colour",
+                    text = "Signature App Themes",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    ThemeColorOption.entries.forEach { option ->
-                        val selected = localPrefs.themeColorKey == option.key
-                        Surface(
-                            onClick = { prefsStore.update { it.copy(themeColorKey = option.key) } },
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(
-                                width = if (selected) 1.5.dp else 1.dp,
-                                color = if (selected) Color(option.primaryHex) else MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("theme_color_${option.key}")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeColorOption.entries.chunked(4).forEach { rowOptions ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
+                            rowOptions.forEach { option ->
+                                val selected = localPrefs.themeColorKey == option.key
+                                Surface(
+                                    onClick = { prefsStore.update { it.copy(themeColorKey = option.key) } },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (selected) {
+                                        Color(option.primaryHex).copy(alpha = 0.14f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                    },
+                                    border = BorderStroke(
+                                        width = if (selected) 1.6.dp else 1.dp,
+                                        color = if (selected) Color(option.primaryHex) else MaterialTheme.colorScheme.outlineVariant
+                                    ),
                                     modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(option.primaryHex))
-                                        .border(
-                                            width = if (selected) 2.dp else 0.dp,
-                                            color = if (selected) Color.White else Color.Transparent,
-                                            shape = CircleShape
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                        .weight(1f)
+                                        .testTag("theme_color_${option.key}")
                                 ) {
-                                    if (selected) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Check,
-                                            contentDescription = option.label,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp)
+                                    Column(
+                                        modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(30.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    androidx.compose.ui.graphics.Brush.linearGradient(
+                                                        listOf(Color(option.primaryHex), Color(option.deepHex))
+                                                    )
+                                                )
+                                                .border(
+                                                    width = if (selected) 2.dp else 0.8.dp,
+                                                    color = if (selected) Color.White else Color.White.copy(alpha = 0.35f),
+                                                    shape = CircleShape
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (selected) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Check,
+                                                    contentDescription = option.label,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = option.label.substringAfter(" "),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
-                                Text(
-                                    text = option.label.substringAfter(" "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1
-                                )
                             }
                         }
                     }
@@ -688,17 +730,136 @@ fun SettingsScreen(
                     shadowElevation = 2.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    val ratio = sampleBillBitmap.width.toFloat() / sampleBillBitmap.height.toFloat()
-                    Image(
-                        bitmap = sampleBillBitmap.asImageBitmap(),
-                        contentDescription = "Sample Bill Model Preview",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(ratio)
-                            .testTag("settings_sample_bill_preview")
-                    )
+                    val rendered = sampleBillState
+                    if (rendered != null) {
+                        Image(
+                            bitmap = rendered.first,
+                            contentDescription = "Sample Bill Model Preview",
+                            contentScale = ContentScale.FillWidth,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(rendered.second)
+                                .testTag("settings_sample_bill_preview")
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(240.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(strokeWidth = 2.5.dp)
+                        }
+                    }
                 }
+            }
+        }
+
+        // 3.5. Universal Bluetooth & Wi-Fi Thermal Printer Card
+        item {
+            ThermalPrinterSettingsCard(
+                localPrefs = localPrefs,
+                prefsStore = prefsStore,
+                companyName = company
+            )
+        }
+
+        // 3.6. CSV Reports & Spreadsheet Export Card
+        item {
+            AshaPanelCard {
+                SettingsSectionHeader(
+                    icon = Icons.Rounded.TableView,
+                    badgeColor = Color(0xFF10B981),
+                    title = "CSV Reports & Export",
+                    subtitle = "Excel & Google Sheets (UTF-8 Bengali supported)"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            haptics.confirm()
+                            CsvReportExporter.saveCsvToDownloads(context, CsvReportType.BILLS_LEDGER, data)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_quick_bills_csv_button")
+                    ) {
+                        Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Bills CSV", fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = {
+                            haptics.tap()
+                            showCsvExportDialog = true
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_open_csv_dialog_button")
+                    ) {
+                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("All CSV Reports", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 3.7. Offline Mode & Haptic Feedback Card
+        item {
+            AshaPanelCard {
+                SettingsSectionHeader(
+                    icon = if (localPrefs.offlineModeEnabled) Icons.Rounded.CloudOff else Icons.Rounded.Vibration,
+                    badgeColor = Color(0xFF6366F1),
+                    title = "Offline Mode & Haptics",
+                    subtitle = if (localPrefs.offlineModeEnabled) {
+                        "Offline Mode active · Changes cached locally"
+                    } else {
+                        "Tactile haptics & automatic cloud sync"
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                SecurityToggleRow(
+                    title = "Offline Mode",
+                    subtitle = "Work completely without internet using local persistent storage; syncs automatically when re-enabled",
+                    checked = localPrefs.offlineModeEnabled,
+                    enabled = true,
+                    tag = "offline_mode_switch",
+                    onCheckedChange = { enabled ->
+                        haptics.confirm()
+                        prefsStore.update { it.copy(offlineModeEnabled = enabled) }
+                    }
+                )
+
+                SecurityToggleRow(
+                    title = "Haptic Feedback",
+                    subtitle = "Subtle tactile vibrations on navigation, keypad, toggles, and confirmations",
+                    checked = localPrefs.hapticFeedbackEnabled,
+                    enabled = true,
+                    tag = "haptic_feedback_switch",
+                    onCheckedChange = { enabled ->
+                        prefsStore.update { it.copy(hapticFeedbackEnabled = enabled) }
+                        if (enabled) {
+                            haptics.confirm()
+                        }
+                    }
+                )
             }
         }
 
@@ -936,6 +1097,9 @@ fun SettingsScreen(
                     Text("Invoices: ${data.bills.size}")
                     Text("Payments: ${data.payments.size}")
                     Text("QR Mode: ${localPrefs.qrMode}")
+                    Text("Thermal Printer: ${ThermalPrinterManager.configuredSummary(localPrefs)}")
+                    Text("Offline Mode: ${if (localPrefs.offlineModeEnabled) "ON (Local Cache)" else "OFF (Auto Cloud Sync)"}")
+                    Text("Haptic Feedback: ${if (localPrefs.hapticFeedbackEnabled) "Enabled" else "Disabled"}")
                     Text("Biometric Status: ${biometricStatus.message}")
                 }
             },
@@ -952,6 +1116,13 @@ fun SettingsScreen(
                     Text(stringResource(R.string.close))
                 }
             }
+        )
+    }
+
+    if (showCsvExportDialog) {
+        CsvReportExportDialog(
+            data = data,
+            onDismiss = { showCsvExportDialog = false }
         )
     }
 }

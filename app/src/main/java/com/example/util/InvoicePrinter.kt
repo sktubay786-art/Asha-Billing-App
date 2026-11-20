@@ -20,12 +20,18 @@ import com.example.data.model.BusinessSettings
 import com.example.data.model.Customer
 import com.example.data.model.Payment
 import com.example.data.model.formatInr
+import com.example.security.AppPreferencesStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.FileOutputStream
 import java.net.URLEncoder
 import java.util.Locale
 import kotlin.math.roundToInt
 
 object InvoicePrinter {
+    private val thermalPrintScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     fun buildShareSummary(
         settings: BusinessSettings,
         bill: Bill,
@@ -129,6 +135,41 @@ object InvoicePrinter {
         customQrPath: String = "",
         bengaliLabels: Boolean = false
     ) {
+        val localPrefs = AppPreferencesStore(context.applicationContext).state.value
+        val isThermalSize = printSize == BillPrintSize.THERMAL_80 || printSize == BillPrintSize.THERMAL_58
+        if (isThermalSize && ThermalPrinterManager.isConfigured(localPrefs)) {
+            Toast.makeText(
+                context,
+                "Printing to ${ThermalPrinterManager.configuredSummary(localPrefs)}…",
+                Toast.LENGTH_SHORT
+            ).show()
+            thermalPrintScope.launch {
+                val res = ThermalPrinterManager.printBillDirect(
+                    context = context.applicationContext,
+                    prefs = localPrefs,
+                    settings = settings,
+                    bill = bill,
+                    payments = payments,
+                    paid = paid,
+                    due = due,
+                    design = design,
+                    qrMode = qrMode,
+                    customQrPath = customQrPath,
+                    bengaliLabels = bengaliLabels
+                )
+                res.onSuccess { msg ->
+                    Toast.makeText(context.applicationContext, msg, Toast.LENGTH_SHORT).show()
+                }.onFailure { err ->
+                    Toast.makeText(
+                        context.applicationContext,
+                        err.localizedMessage ?: "Thermal print failed — check printer connection",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            return
+        }
+
         val hostContext = context.findActivity() ?: context
         val printManager = hostContext.getSystemService(Context.PRINT_SERVICE) as? PrintManager
         if (printManager == null) {

@@ -59,20 +59,26 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -113,7 +119,7 @@ import java.time.LocalDate
 import java.util.Locale
 import kotlin.math.max
 
-private val SEASON_OPTIONS = listOf("খরা", "আমন", "বোরো", "রবি", "Aman", "Boro", "Khora")
+private val SEASON_OPTIONS = listOf("খরা", "বর্ষা", "আমন", "বোরো", "রবি", "Borsha", "Aman", "Boro", "Khora")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -301,7 +307,8 @@ fun NewBillScreen(
         )
     }
 
-    val livePreviewBitmap = remember(
+    val livePreviewState by produceState<Pair<ImageBitmap, Float>?>(
+        initialValue = null,
         draftBill,
         data.settings,
         initialPaid,
@@ -312,18 +319,27 @@ fun NewBillScreen(
         customQrPath,
         bengaliMode
     ) {
-        BillDocumentEngine.renderBillBitmap(
-            settings = data.settings,
-            bill = draftBill,
-            payments = emptyList(),
-            paid = initialPaid,
-            due = remainingAfterPay,
-            design = selectedDesign,
-            size = selectedSize,
-            qrMode = qrMode,
-            customQrPath = customQrPath,
-            bengaliLabels = bengaliMode
-        )
+        delay(80)
+        value = withContext(Dispatchers.Default) {
+            val previewRenderSize = if (selectedSize.widthPx > BillPrintSize.THERMAL_80.widthPx) {
+                BillPrintSize.THERMAL_80
+            } else {
+                selectedSize
+            }
+            val bmp = BillDocumentEngine.renderBillBitmap(
+                settings = data.settings,
+                bill = draftBill,
+                payments = emptyList(),
+                paid = initialPaid,
+                due = remainingAfterPay,
+                design = selectedDesign,
+                size = previewRenderSize,
+                qrMode = qrMode,
+                customQrPath = customQrPath,
+                bengaliLabels = bengaliMode
+            )
+            bmp.asImageBitmap() to (bmp.width.toFloat() / bmp.height.coerceAtLeast(1).toFloat())
+        }
     }
 
     val pdfSaverLauncher = rememberLauncherForActivityResult(
@@ -396,10 +412,10 @@ fun NewBillScreen(
         manualPreviousDueText = formatCleanDouble(cDueVal)
         manualPrevOverrideEnabled = false
         val numericArea = Regex("^\\d+(?:\\.\\d+)?").find(customer.landArea.trim())?.value
-        if (!numericArea.isNullOrBlank() && (landAmountText == "0" || landAmountText.isBlank())) {
+        if (!numericArea.isNullOrBlank()) {
             landAmountText = numericArea
-            selectedUnit = LandUnit.fromKey(customer.landUnit)
         }
+        selectedUnit = LandUnit.fromKey(customer.landUnit)
     }
 
     fun applyScannedCode(rawCode: String) {
@@ -423,7 +439,7 @@ fun NewBillScreen(
             val lower = token.trim().lowercase(Locale.US)
             when {
                 lower.contains("katha") || lower.contains("কাঠা") -> selectedUnit = LandUnit.KATHA
-                lower.contains("dec") || lower.contains("শতক") -> selectedUnit = LandUnit.DECIMAL
+                lower.contains("dec") || lower.contains("ডেসিমাল") || lower.contains("শতক") -> selectedUnit = LandUnit.DECIMAL
                 lower.contains("bigha") || lower.contains("বিঘা") -> selectedUnit = LandUnit.BIGHA
             }
         }
@@ -1449,16 +1465,27 @@ fun NewBillScreen(
                         .fillMaxWidth()
                         .clickable { onPreviewBill(draftBill, selectedDesign, selectedSize) }
                 ) {
-                    val aspect = livePreviewBitmap.width.toFloat() / livePreviewBitmap.height.toFloat()
-                    Image(
-                        bitmap = livePreviewBitmap.asImageBitmap(),
-                        contentDescription = "Live Bill Preview",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(aspect)
-                            .testTag("new_bill_live_preview_image")
-                    )
+                    val rendered = livePreviewState
+                    if (rendered != null) {
+                        Image(
+                            bitmap = rendered.first,
+                            contentDescription = "Live Bill Preview",
+                            contentScale = ContentScale.FillWidth,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(rendered.second)
+                                .testTag("new_bill_live_preview_image")
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(strokeWidth = 2.5.dp)
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1650,7 +1677,7 @@ private fun NewBillActionIconTileCustom(
 private fun unitBengaliLabel(unit: LandUnit): String = when (unit) {
     LandUnit.BIGHA -> "বিঘা (Bigha)"
     LandUnit.KATHA -> "কাঠা (Katha)"
-    LandUnit.DECIMAL -> "শতক (Decimal)"
+    LandUnit.DECIMAL -> "ডেসিমাল (Decimal)"
 }
 
 private fun formatCleanDouble(v: Double): String {

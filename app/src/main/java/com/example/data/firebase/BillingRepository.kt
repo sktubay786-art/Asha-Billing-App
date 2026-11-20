@@ -17,6 +17,7 @@ import com.example.data.model.todayIsoDate
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import com.google.android.gms.tasks.Task
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.max
 import kotlin.math.min
 
@@ -37,11 +39,33 @@ class BillingRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
 ) {
+    @Volatile
+    private var offlineActive: Boolean = false
+
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
         )
     )
+
+    suspend fun setOfflineMode(manualOffline: Boolean, deviceOnline: Boolean) {
+        offlineActive = manualOffline || !deviceOnline
+        runCatching {
+            if (manualOffline) {
+                db.disableNetwork().await()
+            } else if (deviceOnline) {
+                db.enableNetwork().await()
+            }
+        }
+    }
+
+    private suspend fun <T> Task<T>.awaitWrite(): T? {
+        return if (offlineActive) {
+            null
+        } else {
+            withTimeoutOrNull(2500L) { await() }
+        }
+    }
 
     private fun requireAuthorizedUid(expectedUserId: String): String {
         val currentUser = auth.currentUser
@@ -227,11 +251,15 @@ class BillingRepository(
             val uid = requireAuthorizedUid(userId)
             val docRef = userDoc(uid).collection("settings").document("profile")
             docPath = docRef.path
-            val exists = docRef.get().await().exists()
-            if (exists) {
-                docRef.update(settings.toUpdateMap()).await()
+            val exists = if (offlineActive) {
+                runCatching { docRef.get(Source.CACHE).await().exists() }.getOrDefault(false)
             } else {
-                docRef.set(settings.toCreateMap(uid)).await()
+                withTimeoutOrNull(2500L) { docRef.get().await().exists() } ?: false
+            }
+            if (exists) {
+                docRef.update(settings.toUpdateMap()).awaitWrite()
+            } else {
+                docRef.set(settings.toCreateMap(uid)).awaitWrite()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -252,9 +280,9 @@ class BillingRepository(
             val docRef = if (customer.id.isNotBlank()) colRef.document(customer.id) else colRef.document()
             docPath = docRef.path
             if (customer.id.isNotBlank()) {
-                docRef.update(customer.toUpdateMap()).await()
+                docRef.update(customer.toUpdateMap()).awaitWrite()
             } else {
-                docRef.set(customer.toCreateMap(uid)).await()
+                docRef.set(customer.toCreateMap(uid)).awaitWrite()
             }
             Result.success(docRef.id)
         } catch (e: CancellationException) {
@@ -302,7 +330,7 @@ class BillingRepository(
                 batch.set(paymentRef, initialPayment.toCreateMap(uid))
             }
 
-            batch.commit().await()
+            batch.commit().awaitWrite()
             Result.success(billRef.id)
         } catch (e: CancellationException) {
             throw e
@@ -320,7 +348,7 @@ class BillingRepository(
             require(bill.allTotal > 0.0) { "Total amount must be greater than 0." }
             val docRef = userDoc(uid).collection("bills").document(bill.id)
             docPath = docRef.path
-            docRef.update(bill.toUpdateMap()).await()
+            docRef.update(bill.toUpdateMap()).awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -346,7 +374,7 @@ class BillingRepository(
             refs.chunked(450).forEach { chunk ->
                 val batch = db.batch()
                 chunk.forEach { batch.delete(it) }
-                batch.commit().await()
+                batch.commit().awaitWrite()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -367,7 +395,7 @@ class BillingRepository(
 
             val paymentRef = userDoc(uid).collection("payments").document()
             docPath = paymentRef.path
-            paymentRef.set(payment.toCreateMap(uid)).await()
+            paymentRef.set(payment.toCreateMap(uid)).awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -385,7 +413,7 @@ class BillingRepository(
             require(payment.amount > 0.0) { "Payment amount must be greater than 0." }
             val docRef = userDoc(uid).collection("payments").document(payment.id)
             docPath = docRef.path
-            docRef.update(payment.toUpdateMap()).await()
+            docRef.update(payment.toUpdateMap()).awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -402,7 +430,7 @@ class BillingRepository(
             require(paymentId.isNotBlank()) { "Payment ID is required." }
             val docRef = userDoc(uid).collection("payments").document(paymentId)
             docPath = docRef.path
-            docRef.delete().await()
+            docRef.delete().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -459,7 +487,7 @@ class BillingRepository(
                 )
             }
 
-            batch.commit().await()
+            batch.commit().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -488,7 +516,7 @@ class BillingRepository(
             refs.chunked(450).forEach { chunk ->
                 val batch = db.batch()
                 chunk.forEach { batch.delete(it) }
-                batch.commit().await()
+                batch.commit().awaitWrite()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -509,9 +537,9 @@ class BillingRepository(
             val docRef = if (expense.id.isNotBlank()) colRef.document(expense.id) else colRef.document()
             docPath = docRef.path
             if (expense.id.isNotBlank()) {
-                docRef.update(expense.toUpdateMap()).await()
+                docRef.update(expense.toUpdateMap()).awaitWrite()
             } else {
-                docRef.set(expense.toCreateMap(uid)).await()
+                docRef.set(expense.toCreateMap(uid)).awaitWrite()
             }
             Result.success(docRef.id)
         } catch (e: CancellationException) {
@@ -533,7 +561,7 @@ class BillingRepository(
             require(expenseId.isNotBlank()) { "Expense ID is required." }
             val docRef = userDoc(uid).collection("expenses").document(expenseId)
             docPath = docRef.path
-            docRef.delete().await()
+            docRef.delete().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -551,7 +579,7 @@ class BillingRepository(
             require(message.text.trim().isNotEmpty()) { "Message cannot be empty." }
             val docRef = userDoc(uid).collection("chatMessages").document()
             docPath = docRef.path
-            docRef.set(message.toCreateMap(uid)).await()
+            docRef.set(message.toCreateMap(uid)).awaitWrite()
             Result.success(docRef.id)
         } catch (e: CancellationException) {
             throw e
@@ -574,7 +602,7 @@ class BillingRepository(
                     "text" to newText.trim().take(1000),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-            ).await()
+            ).awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -591,7 +619,7 @@ class BillingRepository(
             require(messageId.isNotBlank()) { "Message ID is required." }
             val docRef = userDoc(uid).collection("chatMessages").document(messageId)
             docPath = docRef.path
-            docRef.delete().await()
+            docRef.delete().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -611,9 +639,9 @@ class BillingRepository(
             val docRef = if (consumer.id.isNotBlank()) colRef.document(consumer.id) else colRef.document()
             docPath = docRef.path
             if (consumer.id.isNotBlank()) {
-                docRef.update(consumer.toUpdateMap()).await()
+                docRef.update(consumer.toUpdateMap()).awaitWrite()
             } else {
-                docRef.set(consumer.toCreateMap(uid)).await()
+                docRef.set(consumer.toCreateMap(uid)).awaitWrite()
             }
             Result.success(docRef.id)
         } catch (e: CancellationException) {
@@ -635,7 +663,7 @@ class BillingRepository(
             require(consumerId.isNotBlank()) { "Consumer ID is required." }
             val docRef = userDoc(uid).collection("wbsedclConsumers").document(consumerId)
             docPath = docRef.path
-            docRef.delete().await()
+            docRef.delete().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -656,9 +684,9 @@ class BillingRepository(
             val docRef = if (payment.id.isNotBlank()) colRef.document(payment.id) else colRef.document()
             docPath = docRef.path
             if (payment.id.isNotBlank()) {
-                docRef.update(payment.toUpdateMap()).await()
+                docRef.update(payment.toUpdateMap()).awaitWrite()
             } else {
-                docRef.set(payment.toCreateMap(uid)).await()
+                docRef.set(payment.toCreateMap(uid)).awaitWrite()
             }
             Result.success(docRef.id)
         } catch (e: CancellationException) {
@@ -680,7 +708,7 @@ class BillingRepository(
             require(paymentId.isNotBlank()) { "Payment ID is required." }
             val docRef = userDoc(uid).collection("wbsedclPayments").document(paymentId)
             docPath = docRef.path
-            docRef.delete().await()
+            docRef.delete().awaitWrite()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -691,6 +719,9 @@ class BillingRepository(
     }
 
     suspend fun forceSync(userId: String): Result<Unit> {
+        if (offlineActive) {
+            return Result.failure(IllegalStateException("Offline Mode is active — disable Offline Mode or reconnect to sync."))
+        }
         val path = "users/$userId/customers"
         return try {
             val uid = requireAuthorizedUid(userId)

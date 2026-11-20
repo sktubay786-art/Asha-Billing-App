@@ -108,6 +108,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
@@ -162,13 +163,20 @@ fun attemptAutoSignIn(
             val cred = response?.credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(
-                    GoogleAuthProvider.getCredential(token, null)
-                ).await()
-                onAuthSuccess()
+                withContext(NonCancellable) {
+                    Firebase.auth.signInWithCredential(
+                        GoogleAuthProvider.getCredential(token, null)
+                    ).await()
+                    onAuthSuccess()
+                }
             } else {
                 onUnauthenticated()
             }
+        } catch (e: CancellationException) {
+            if (Firebase.auth.currentUser != null) {
+                onAuthSuccess()
+            }
+            throw e
         } catch (_: Exception) {
             onUnauthenticated()
         }
@@ -203,13 +211,20 @@ fun onGoogleSignInClicked(
             val cred = credentialManager.getCredential(activityContext, request).credential
             if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
-                Firebase.auth.signInWithCredential(
-                    GoogleAuthProvider.getCredential(token, null)
-                ).await()
-                onAuthSuccess()
+                withContext(NonCancellable) {
+                    Firebase.auth.signInWithCredential(
+                        GoogleAuthProvider.getCredential(token, null)
+                    ).await()
+                    onAuthSuccess()
+                }
             } else {
                 onAuthError("Unexpected credential type returned.")
             }
+        } catch (e: CancellationException) {
+            if (Firebase.auth.currentUser != null) {
+                onAuthSuccess()
+            }
+            throw e
         } catch (e: GetCredentialCancellationException) {
             Log.w(TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
             onAuthCancelled("Sign-in cancelled. Choose your authorized Google email account.")
@@ -245,10 +260,12 @@ fun signOut(
 @Composable
 fun AuthScreen(
     prefsStore: AppPreferencesStore,
-    onAuthSuccess: () -> Unit
+    onAuthSuccess: () -> Unit,
+    authScope: CoroutineScope? = null
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val fallbackScope = rememberCoroutineScope()
+    val scope = authScope ?: fallbackScope
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val localPrefs by prefsStore.state.collectAsStateWithLifecycle()
     val biometricStatus = remember(context) { checkBiometricAvailability(context) }
@@ -269,17 +286,6 @@ fun AuthScreen(
         targetValue = if (appeared) 1f else 0f,
         animationSpec = spring(stiffness = Spring.StiffnessLow),
         label = "auth_card_alpha"
-    )
-
-    val floatTransition = rememberInfiniteTransition(label = "sphere_float")
-    val sphereDrift by floatTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 4200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "sphere_drift_y"
     )
 
     LaunchedEffect(Unit) {
@@ -446,10 +452,10 @@ fun AuthScreen(
                 )
             }
 
-            drawGlossy3dSphere(Offset(w * 0.21f, h * 0.32f + sphereDrift), w * 0.17f, "আশা")
-            drawGlossy3dSphere(Offset(w * 0.80f, h * 0.35f - sphereDrift * 0.8f), w * 0.23f, "AS")
-            drawGlossy3dSphere(Offset(w * 0.15f, h * 0.56f - sphereDrift * 0.6f), w * 0.13f, "AS")
-            drawGlossy3dSphere(Offset(w * 0.56f, h * 0.72f + sphereDrift * 0.7f), w * 0.13f, "আশা")
+            drawGlossy3dSphere(Offset(w * 0.21f, h * 0.32f), w * 0.17f, "আশা")
+            drawGlossy3dSphere(Offset(w * 0.80f, h * 0.35f), w * 0.23f, "AS")
+            drawGlossy3dSphere(Offset(w * 0.15f, h * 0.56f), w * 0.13f, "AS")
+            drawGlossy3dSphere(Offset(w * 0.56f, h * 0.72f), w * 0.13f, "আশা")
         }
 
         Column(

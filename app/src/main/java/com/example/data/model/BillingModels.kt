@@ -82,6 +82,7 @@ data class Customer(
             rawArea.contains("decimal", ignoreCase = true) ||
                 rawArea.contains("katha", ignoreCase = true) ||
                 rawArea.contains("bigha", ignoreCase = true) ||
+                rawArea.contains("ডেসিমাল") ||
                 rawArea.contains("শতক") ||
                 rawArea.contains("কাঠা") ||
                 rawArea.contains("বিঘা") -> rawArea
@@ -409,6 +410,17 @@ enum class BillStatus(val label: String) {
     PAID("Paid")
 }
 
+data class MonthlyPaymentTrendPoint(
+    val yearMonthKey: String,   // e.g. "2026-11"
+    val shortLabel: String,     // e.g. "Nov"
+    val fullLabel: String,      // e.g. "Nov 2026"
+    val regularPaid: Double,
+    val settledPaid: Double,
+    val receiptCount: Int
+) {
+    val totalAmount: Double get() = roundMoney(regularPaid + settledPaid)
+}
+
 data class BillingDashboardData(
     val settings: BusinessSettings = BusinessSettings(),
     val customers: List<Customer> = emptyList(),
@@ -419,18 +431,38 @@ data class BillingDashboardData(
     val wbsedclConsumers: List<WbsedclConsumer> = emptyList(),
     val wbsedclPayments: List<WbsedclBillPayment> = emptyList()
 ) {
-    private val paymentsByBill: Map<String, List<Payment>> = payments.groupBy { it.billId }
+    private val paymentsByBill: Map<String, List<Payment>> by lazy {
+        payments.groupBy { it.billId }
+    }
+    private val paidByBill: Map<String, Double> by lazy {
+        paymentsByBill.mapValues { (_, list) -> roundMoney(list.sumOf { it.amount }) }
+    }
+    private val billsByCustomer: Map<String, List<Bill>> by lazy {
+        bills.groupBy { it.customerId }
+    }
+    private val customersById: Map<String, Customer> by lazy {
+        customers.associateBy { it.id }
+    }
+    private val chatMessagesByCustomer: Map<String, List<ChatMessage>> by lazy {
+        chatMessages.groupBy { it.customerId }.mapValues { (_, list) ->
+            list.sortedWith(compareBy<ChatMessage> { it.date }.thenBy { it.createdAt?.toDate()?.time ?: 0L })
+        }
+    }
+    private val dueByCustomer: Map<String, Double> by lazy {
+        customers.associate { customer ->
+            val billsDue = billsByCustomer[customer.id].orEmpty().sumOf { dueForBill(it) }
+            customer.id to roundMoney(customer.openingDue + billsDue)
+        }
+    }
 
     fun chatMessagesForCustomer(customerId: String): List<ChatMessage> =
-        chatMessages
-            .filter { it.customerId == customerId }
-            .sortedWith(compareBy<ChatMessage> { it.date }.thenBy { it.createdAt?.toDate()?.time ?: 0L })
+        chatMessagesByCustomer[customerId].orEmpty()
 
     fun paymentsForBill(billId: String): List<Payment> =
         paymentsByBill[billId].orEmpty().sortedBy { it.date }
 
     fun paidForBill(billId: String): Double =
-        roundMoney(paymentsByBill[billId].orEmpty().sumOf { it.amount })
+        paidByBill[billId] ?: 0.0
 
     fun dueForBill(bill: Bill): Double =
         roundMoney(max(0.0, bill.allTotal - paidForBill(bill.id)))
@@ -446,37 +478,97 @@ data class BillingDashboardData(
     }
 
     fun billsForCustomer(customerId: String): List<Bill> =
-        bills.filter { it.customerId == customerId }.sortedByDescending { it.date }
+        billsByCustomer[customerId].orEmpty().sortedByDescending { it.date }
 
     fun dueForCustomer(customerId: String): Double {
-        val opening = customers.firstOrNull { it.id == customerId }?.openingDue ?: 0.0
-        val billsDue = bills.filter { it.customerId == customerId }.sumOf { dueForBill(it) }
+        dueByCustomer[customerId]?.let { return it }
+        val opening = customersById[customerId]?.openingDue ?: 0.0
+        val billsDue = billsByCustomer[customerId].orEmpty().sumOf { dueForBill(it) }
         return roundMoney(opening + billsDue)
     }
 
-    val totalBilled: Double
-        get() = roundMoney(bills.sumOf { it.allTotal })
+    val totalBilled: Double by lazy {
+        roundMoney(bills.sumOf { it.allTotal })
+    }
 
-    val totalCollected: Double
-        get() = roundMoney(bills.sumOf { paidForBill(it.id) })
+    val totalCollected: Double by lazy {
+        roundMoney(bills.sumOf { paidForBill(it.id) })
+    }
 
-    val totalOutstanding: Double
-        get() = roundMoney(customers.sumOf { dueForCustomer(it.id) })
+    val totalSettled: Double by lazy {
+        roundMoney(
+            payments
+                .filter { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+                .sumOf { it.amount }
+        )
+    }
 
-    val totalExpenses: Double
-        get() = roundMoney(expenses.sumOf { it.amount })
+    val settledCount: Int by lazy {
+        payments.count { PaymentMode.fromLabel(it.mode) == PaymentMode.SETTLEMENT }
+    }
 
-    val netCollectedProfit: Double
-        get() = roundMoney(totalCollected - totalExpenses)
+    val totalOutstanding: Double by lazy {
+        roundMoney(customers.sumOf { dueForCustomer(it.id) })
+    }
 
-    val projectedNetProfit: Double
-        get() = roundMoney(totalBilled - totalExpenses)
+    val totalExpenses: Double by lazy {
+        roundMoney(expenses.sumOf { it.amount })
+    }
 
-    val totalWbsedclSpent: Double
-        get() = roundMoney(wbsedclPayments.sumOf { it.amount })
+    val netCollectedProfit: Double by lazy {
+        roundMoney(totalCollected - totalExpenses)
+    }
 
-    val collectionPercent: Int
-        get() = if (totalBilled <= 0.0) 0 else ((totalCollected / totalBilled) * 100.0).toInt().coerceIn(0, 100)
+    val projectedNetProfit: Double by lazy {
+        roundMoney(totalBilled - totalExpenses)
+    }
+
+    val totalWbsedclSpent: Double by lazy {
+        roundMoney(wbsedclPayments.sumOf { it.amount })
+    }
+
+    val collectionPercent: Int by lazy {
+        if (totalBilled <= 0.0) 0 else ((totalCollected / totalBilled) * 100.0).toInt().coerceIn(0, 100)
+    }
+
+    /**
+     * Computes monthly customer payment history for the last [monthsCount] months (oldest -> newest).
+     */
+    fun monthlyPaymentTrends(
+        monthsCount: Int = 6,
+        paymentFilter: List<Payment> = payments
+    ): List<MonthlyPaymentTrendPoint> {
+        val now = LocalDate.now().withDayOfMonth(1)
+        val ymFmt = DateTimeFormatter.ofPattern("yyyy-MM", Locale.US)
+        val shortFmt = DateTimeFormatter.ofPattern("MMM", Locale.US)
+        val fullFmt = DateTimeFormatter.ofPattern("MMM yyyy", Locale.US)
+        val grouped = paymentFilter.groupBy { p ->
+            val raw = p.date.trim()
+            if (raw.length >= 7) raw.substring(0, 7) else ""
+        }
+        return ((monthsCount - 1) downTo 0).map { offset ->
+            val monthDate = now.minusMonths(offset.toLong())
+            val key = monthDate.format(ymFmt)
+            val monthPayments = grouped[key].orEmpty()
+            var regular = 0.0
+            var settled = 0.0
+            monthPayments.forEach { p ->
+                if (PaymentMode.fromLabel(p.mode) == PaymentMode.SETTLEMENT) {
+                    settled += p.amount
+                } else {
+                    regular += p.amount
+                }
+            }
+            MonthlyPaymentTrendPoint(
+                yearMonthKey = key,
+                shortLabel = monthDate.format(shortFmt),
+                fullLabel = monthDate.format(fullFmt),
+                regularPaid = roundMoney(regular),
+                settledPaid = roundMoney(settled),
+                receiptCount = monthPayments.size
+            )
+        }
+    }
 }
 
 fun roundMoney(v: Double): Double = kotlin.math.round(v * 100.0) / 100.0
@@ -486,11 +578,15 @@ fun calculateBigha(amount: Double, unit: LandUnit): Double {
     return amount / unit.perBigha
 }
 
-fun formatInr(amount: Double): String {
-    val formatter = NumberFormat.getNumberInstance(Locale.forLanguageTag("en-IN")).apply {
+private val inrFormatterLocal: ThreadLocal<NumberFormat> = ThreadLocal.withInitial {
+    NumberFormat.getNumberInstance(Locale.forLanguageTag("en-IN")).apply {
         maximumFractionDigits = 2
         minimumFractionDigits = 0
     }
+}
+
+fun formatInr(amount: Double): String {
+    val formatter = inrFormatterLocal.get() ?: NumberFormat.getNumberInstance(Locale.forLanguageTag("en-IN"))
     return "₹${formatter.format(amount)}"
 }
 

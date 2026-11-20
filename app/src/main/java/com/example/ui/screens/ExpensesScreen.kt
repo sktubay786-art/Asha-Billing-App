@@ -81,6 +81,7 @@ import com.example.data.model.formatInr
 import com.example.data.model.todayIsoDate
 import com.example.ui.components.AshaDatePickerDialog
 import com.example.ui.components.AshaPanelCard
+import com.example.ui.components.ProvideSafeTextToolbar
 import com.example.ui.components.IosSquircleIcon
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
@@ -663,10 +664,11 @@ fun ExpenseFormDialog(
     var validationError by remember { mutableStateOf<String?>(null) }
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
+        ProvideSafeTextToolbar {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface
+            ) {
             Column(
                 modifier = Modifier
                     .padding(20.dp)
@@ -829,6 +831,7 @@ fun ExpenseFormDialog(
                     Text(if (initial == null) "Save Expense" else "Update Expense", fontWeight = FontWeight.Bold)
                 }
             }
+        }
         }
     }
 

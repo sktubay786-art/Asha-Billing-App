@@ -77,6 +77,7 @@ import com.example.data.model.customerInitials
 import com.example.data.model.formatInr
 import com.example.ui.components.AshaPanelCard
 import com.example.ui.components.BarcodeScannerDialog
+import com.example.ui.components.ProvideSafeTextToolbar
 import com.example.ui.theme.CrimsonContainer
 import com.example.ui.theme.CrimsonDue
 import com.example.ui.theme.EmeraldDeep
@@ -107,6 +108,7 @@ fun CustomersScreen(
         address: String,
         openingDue: Double,
         landArea: String,
+        landUnit: LandUnit,
         landOwnerType: String,
         landOwnerName: String,
         onComplete: (Boolean) -> Unit
@@ -343,7 +345,7 @@ fun CustomersScreen(
         CustomerFormDialog(
             initial = editingCustomer,
             onDismiss = { showFormDialog = false },
-            onSave = { name, phone, village, address, openingDue, landArea, landOwnerType, landOwnerName ->
+            onSave = { name, phone, village, address, openingDue, landArea, landUnit, landOwnerType, landOwnerName ->
                 onSaveCustomer(
                     editingCustomer?.id.orEmpty(),
                     name,
@@ -352,6 +354,7 @@ fun CustomersScreen(
                     address,
                     openingDue,
                     landArea,
+                    landUnit,
                     landOwnerType,
                     landOwnerName
                 ) { success ->
@@ -511,10 +514,26 @@ fun CustomerFormDialog(
         address: String,
         openingDue: Double,
         landArea: String,
+        landUnit: LandUnit,
         landOwnerType: String,
         landOwnerName: String
     ) -> Unit
 ) {
+    val parsedInitialLand = remember(initial) {
+        val raw = initial?.landArea?.trim().orEmpty()
+        val inferredUnit = when {
+            raw.contains("katha", ignoreCase = true) || raw.contains("কাঠা") -> LandUnit.KATHA
+            raw.contains("bigha", ignoreCase = true) || raw.contains("বিঘা") -> LandUnit.BIGHA
+            raw.contains("dec", ignoreCase = true) || raw.contains("ডেসিমাল") || raw.contains("শতক") -> LandUnit.DECIMAL
+            else -> initial?.normalizedLandUnit() ?: LandUnit.DECIMAL
+        }
+        val stripped = raw.replace(
+            Regex("\\s*(bigha|katha|decimal|dec\\.?|বিঘা|কাঠা|ডেসিমাল|শতক)\\s*$", RegexOption.IGNORE_CASE),
+            ""
+        ).trim()
+        val cleanedArea = if (stripped.toDoubleOrNull() != null) stripped else raw
+        cleanedArea to inferredUnit
+    }
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var phone by remember { mutableStateOf(initial?.phone.orEmpty()) }
     var village by remember { mutableStateOf(initial?.village.orEmpty()) }
@@ -524,7 +543,8 @@ fun CustomerFormDialog(
             if (initial != null && initial.openingDue > 0.0) initial.openingDue.toString() else "0"
         )
     }
-    var landArea by remember { mutableStateOf(initial?.landArea.orEmpty()) }
+    var landArea by remember { mutableStateOf(parsedInitialLand.first) }
+    var landUnit by remember { mutableStateOf(parsedInitialLand.second) }
     var ownerType by remember {
         mutableStateOf(initial?.normalizedOwnerType() ?: "Own")
     }
@@ -532,10 +552,11 @@ fun CustomerFormDialog(
     var nameError by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
+        ProvideSafeTextToolbar {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface
+            ) {
             Column(
                 modifier = Modifier
                     .padding(20.dp)
@@ -621,13 +642,79 @@ fun CustomerFormDialog(
                             value = landArea,
                             onValueChange = { landArea = it },
                             label = { Text("জমির পরিমাণ / Area") },
-                            placeholder = { Text("e.g. 2.5 Bigha / 40 Dec") },
+                            placeholder = {
+                                Text(
+                                    when (landUnit) {
+                                        LandUnit.KATHA -> "e.g. 10 (কাঠা / Katha)"
+                                        LandUnit.BIGHA -> "e.g. 2.5 (বিঘা / Bigha)"
+                                        LandUnit.DECIMAL -> "e.g. 40 (ডেসিমাল / Decimal)"
+                                    }
+                                )
+                            },
+                            suffix = {
+                                Text(
+                                    text = when (landUnit) {
+                                        LandUnit.KATHA -> "কাঠা"
+                                        LandUnit.BIGHA -> "বিঘা"
+                                        LandUnit.DECIMAL -> "ডেসিমাল"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("customer_land_area_input")
                         )
+
+                        Text(
+                            text = "Area Unit / জমির একক",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        val unitOptions = remember {
+                            listOf(
+                                Triple(LandUnit.KATHA, "কাঠা", "Katha"),
+                                Triple(LandUnit.BIGHA, "বিঘা", "Bigha"),
+                                Triple(LandUnit.DECIMAL, "ডেসিমাল", "Decimal")
+                            )
+                        }
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            unitOptions.forEachIndexed { idx, (unitOption, bnLabel, enLabel) ->
+                                SegmentedButton(
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = idx,
+                                        count = unitOptions.size
+                                    ),
+                                    selected = landUnit == unitOption,
+                                    onClick = { landUnit = unitOption },
+                                    icon = {},
+                                    modifier = Modifier.testTag("customer_land_unit_${unitOption.key}")
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = bnLabel,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = enLabel,
+                                            fontSize = 10.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
                         Text(
                             text = "Land Owner",
@@ -697,6 +784,7 @@ fun CustomerFormDialog(
                             address,
                             due,
                             landArea.trim(),
+                            landUnit,
                             ownerType,
                             if (ownerType == "Other") ownerName.trim() else ""
                         )
@@ -711,6 +799,7 @@ fun CustomerFormDialog(
                     Text(stringResource(R.string.save_customer))
                 }
             }
+        }
         }
     }
 }
@@ -731,27 +820,29 @@ fun SettleCustomerDialog(
         onDismissRequest = onDismiss,
         title = { Text("Settle ${customer.name}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Due: ${formatInr(totalDue)}",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                OutlinedTextField(
-                    value = amountText,
-                    onValueChange = {
-                        amountText = it
-                        invalidError = false
-                    },
-                    label = { Text(stringResource(R.string.amount_inr)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    isError = invalidError,
-                    supportingText = if (invalidError) ({ Text("Enter an amount between 0 and ${formatInr(totalDue)}") }) else null,
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("settle_amount_input")
-                )
+            ProvideSafeTextToolbar {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Due: ${formatInr(totalDue)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = {
+                            amountText = it
+                            invalidError = false
+                        },
+                        label = { Text(stringResource(R.string.amount_inr)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        isError = invalidError,
+                        supportingText = if (invalidError) ({ Text("Enter an amount between 0 and ${formatInr(totalDue)}") }) else null,
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settle_amount_input")
+                    )
+                }
             }
         },
         confirmButton = {

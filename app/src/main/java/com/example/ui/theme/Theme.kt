@@ -68,16 +68,23 @@ fun AshaBillingTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     primaryColor: Color = EmeraldPrimary,
     deepColor: Color = EmeraldDeep,
+    lightContainerColor: Color = EmeraldMint,
+    darkPrimaryColor: Color = DarkPrimary,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) {
         DarkColorScheme.copy(
-            primaryContainer = deepColor
+            primary = darkPrimaryColor,
+            secondary = darkPrimaryColor,
+            primaryContainer = deepColor,
+            onPrimaryContainer = Color.White
         )
     } else {
         LightColorScheme.copy(
             primary = primaryColor,
-            secondary = deepColor
+            secondary = deepColor,
+            primaryContainer = lightContainerColor,
+            onPrimaryContainer = deepColor
         )
     }
     MaterialTheme(
